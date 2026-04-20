@@ -57,8 +57,8 @@ func TestSocketE2EMissingMetaIDRejected(t *testing.T) {
 	}
 	defer conn.Close()
 
-	if err := sendSocketIOPacket(conn, "40"); err != nil {
-		t.Fatalf("send connect packet: %v", err)
+	if err := completeSocketIOHandshake(conn, 8*time.Second); err != nil {
+		t.Fatalf("complete socket.io handshake: %v", err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 
@@ -124,8 +124,8 @@ func runSocketProbe(wsURL string) (*socketProbeResult, error) {
 	}
 	defer conn.Close()
 
-	if err := sendSocketIOPacket(conn, "40"); err != nil {
-		return nil, fmt.Errorf("send connect packet: %w", err)
+	if err := completeSocketIOHandshake(conn, 8*time.Second); err != nil {
+		return nil, fmt.Errorf("complete socket.io handshake: %w", err)
 	}
 	connectAck, err := waitEnvelopeByMethod(conn, socket.WS_RESPONSE_SUCCESS, 8*time.Second)
 	if err != nil {
@@ -256,6 +256,48 @@ func sendSocketIOPacket(conn *websocket.Conn, packet string) error {
 		return fmt.Errorf("write socket packet %s: %w", packet, err)
 	}
 	return nil
+}
+
+func completeSocketIOHandshake(conn *websocket.Conn, timeout time.Duration) error {
+	if conn == nil {
+		return fmt.Errorf("websocket conn is nil")
+	}
+	if err := waitEngineIOOpen(conn, timeout); err != nil {
+		return err
+	}
+	if err := sendSocketIOPacket(conn, "40"); err != nil {
+		return fmt.Errorf("send connect packet: %w", err)
+	}
+	return nil
+}
+
+func waitEngineIOOpen(conn *websocket.Conn, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting engine.io open packet")
+		}
+
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			return fmt.Errorf("set read deadline: %w", err)
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("read websocket frame: %w", err)
+		}
+		frame := string(payload)
+
+		if frame == "2" {
+			if err := sendSocketIOPacket(conn, "3"); err != nil {
+				return fmt.Errorf("write engine.io pong: %w", err)
+			}
+			continue
+		}
+
+		if strings.HasPrefix(frame, "0{") {
+			return nil
+		}
+	}
 }
 
 func waitEnvelopeByMethod(conn *websocket.Conn, method string, timeout time.Duration) (*socket.SocketData, error) {
