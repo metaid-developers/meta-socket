@@ -102,9 +102,9 @@
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/cmd/meta-socket/main.go`
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/config/config.go`
 
-- [ ] **Step 1: 初始化工程与配置模型**
-- [ ] **Step 2: 预留 socket/zmq/pebble/profile 配置节**
-- [ ] **Step 3: 启动空服务并通过健康检查**
+- [x] **Step 1: 初始化工程与配置模型**
+- [x] **Step 2: 预留 socket/zmq/pebble/profile 配置节**
+- [x] **Step 3: 启动空服务并通过健康检查**
 
 ### Task 3: 迁移 SocketManager 并做路径兼容
 
