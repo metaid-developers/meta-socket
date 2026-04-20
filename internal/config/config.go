@@ -98,17 +98,17 @@ func Default() Config {
 			BTC: ChainZMQConfig{
 				Enabled:  false,
 				Endpoint: "",
-				Topic:    "hashblock",
+				Topic:    "rawtx",
 			},
 			MVC: ChainZMQConfig{
 				Enabled:  false,
 				Endpoint: "",
-				Topic:    "hashblock",
+				Topic:    "rawtx",
 			},
 			DOGE: ChainZMQConfig{
 				Enabled:  false,
 				Endpoint: "",
-				Topic:    "hashblock",
+				Topic:    "rawtx",
 			},
 		},
 		Pebble: PebbleConfig{
