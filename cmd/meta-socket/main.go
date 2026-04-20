@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os/signal"
@@ -11,8 +10,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/adapter"
 	"github.com/metaid-developers/meta-socket/internal/config"
+	groupchatdb "github.com/metaid-developers/meta-socket/internal/groupchat/db"
+	groupchatpush "github.com/metaid-developers/meta-socket/internal/groupchat/push"
 	"github.com/metaid-developers/meta-socket/internal/pipeline"
 	metasocket "github.com/metaid-developers/meta-socket/internal/socket"
 )
@@ -45,20 +45,17 @@ func main() {
 		log.Printf("socket service disabled by config")
 	}
 
+	groupchatpush.Configure(groupchatpush.ServiceConfig{
+		RoomBroadcastEnabled: cfg.Socket.RoomBroadcastEnabled,
+	})
+	groupchatpush.RegisterDBHooks()
+
 	if cfg.ZMQ.Enabled {
+		groupProcessor := groupchatdb.NewProcessor()
 		handlers := pipeline.RouterHandlers{
-			OnGroup: func(pin *adapter.PinRecord, tx json.RawMessage) error {
-				log.Printf("[PIPELINE] group pin routed: chain=%s pinId=%s path=%s globalMetaId=%s", pin.ChainName, pin.ID, pin.Path, pin.GlobalMetaID)
-				return nil
-			},
-			OnPrivate: func(pin *adapter.PinRecord, tx json.RawMessage) error {
-				log.Printf("[PIPELINE] private pin routed: chain=%s pinId=%s path=%s globalMetaId=%s", pin.ChainName, pin.ID, pin.Path, pin.GlobalMetaID)
-				return nil
-			},
-			OnGroupRole: func(pin *adapter.PinRecord, tx json.RawMessage) error {
-				log.Printf("[PIPELINE] group-role pin routed: chain=%s pinId=%s path=%s globalMetaId=%s", pin.ChainName, pin.ID, pin.Path, pin.GlobalMetaID)
-				return nil
-			},
+			OnGroup:     groupProcessor.ProcessGroupPin,
+			OnPrivate:   groupProcessor.ProcessPrivatePin,
+			OnGroupRole: groupProcessor.ProcessGroupRolePin,
 		}
 		pinRouter := pipeline.NewPinRouter(nil, handlers)
 		zmqRunner = pipeline.NewZMQRunner(pinRouter)

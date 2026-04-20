@@ -138,9 +138,10 @@
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/groupchat/push/socket_room.go`
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/groupchat/db/*.go`
 
-- [ ] **Step 1: 迁移 db 回调钩子（`dealGroupChatItem/dealPrivateChatItem/dealGroupRoleInfoChangeList`）**
-- [ ] **Step 2: 迁移 payload 组装，保证字段与旧服务一致**
-- [ ] **Step 3: 完成 room 广播与 fallback 单播逻辑**
+- [x] **Step 1: 迁移 db 回调钩子（`dealGroupChatItem/dealPrivateChatItem/dealGroupRoleInfoChangeList`）**
+- [x] **Step 2: 迁移 payload 组装，保证字段与旧服务一致**
+- [x] **Step 3: 完成 room 广播与 fallback 单播逻辑**
+  - 当前实现基于 `groupchat/db` 的最小可运行模型与 pipeline 入参组装 payload，后续会在 Task 7 双跑对比阶段继续对齐字段细节与边界行为。
 
 ### Task 6: 裁剪非核心模块（首轮收口）
 

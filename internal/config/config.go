@@ -24,16 +24,17 @@ type ServiceConfig struct {
 }
 
 type SocketConfig struct {
-	Enabled          bool          `json:"enabled"`
-	PrimaryPath      string        `json:"primaryPath"`
-	LegacyPath       string        `json:"legacyPath"`
-	MaxConnections   int           `json:"maxConnections"`
-	MaxPCPerUser     int           `json:"maxPcPerUser"`
-	MaxAppPerUser    int           `json:"maxAppPerUser"`
-	PingInterval     time.Duration `json:"pingInterval"`
-	PingTimeout      time.Duration `json:"pingTimeout"`
-	AllowEIO3        bool          `json:"allowEio3"`
-	ExtraPushAuthKey string        `json:"extraPushAuthKey"`
+	Enabled              bool          `json:"enabled"`
+	PrimaryPath          string        `json:"primaryPath"`
+	LegacyPath           string        `json:"legacyPath"`
+	RoomBroadcastEnabled bool          `json:"roomBroadcastEnabled"`
+	MaxConnections       int           `json:"maxConnections"`
+	MaxPCPerUser         int           `json:"maxPcPerUser"`
+	MaxAppPerUser        int           `json:"maxAppPerUser"`
+	PingInterval         time.Duration `json:"pingInterval"`
+	PingTimeout          time.Duration `json:"pingTimeout"`
+	AllowEIO3            bool          `json:"allowEio3"`
+	ExtraPushAuthKey     string        `json:"extraPushAuthKey"`
 }
 
 type ZMQConfig struct {
@@ -69,16 +70,17 @@ func Default() Config {
 			ShutdownTimeout: 10 * time.Second,
 		},
 		Socket: SocketConfig{
-			Enabled:          true,
-			PrimaryPath:      "/socket/socket.io",
-			LegacyPath:       "/socket.io",
-			MaxConnections:   10000,
-			MaxPCPerUser:     3,
-			MaxAppPerUser:    3,
-			PingInterval:     2 * time.Second,
-			PingTimeout:      5 * time.Second,
-			AllowEIO3:        true,
-			ExtraPushAuthKey: "",
+			Enabled:              true,
+			PrimaryPath:          "/socket/socket.io",
+			LegacyPath:           "/socket.io",
+			RoomBroadcastEnabled: true,
+			MaxConnections:       10000,
+			MaxPCPerUser:         3,
+			MaxAppPerUser:        3,
+			PingInterval:         2 * time.Second,
+			PingTimeout:          5 * time.Second,
+			AllowEIO3:            true,
+			ExtraPushAuthKey:     "",
 		},
 		ZMQ: ZMQConfig{
 			Enabled: false,
@@ -121,6 +123,7 @@ func Load() (Config, error) {
 	applyBoolEnv("META_SOCKET_SOCKET_ENABLED", &cfg.Socket.Enabled)
 	applyStringEnv("META_SOCKET_SOCKET_PATH", &cfg.Socket.PrimaryPath)
 	applyStringEnv("META_SOCKET_SOCKET_LEGACY_PATH", &cfg.Socket.LegacyPath)
+	applyBoolEnv("META_SOCKET_SOCKET_ROOM_BROADCAST_ENABLED", &cfg.Socket.RoomBroadcastEnabled)
 	applyIntEnv("META_SOCKET_SOCKET_MAX_CONNECTIONS", &cfg.Socket.MaxConnections)
 	applyIntEnv("META_SOCKET_SOCKET_MAX_PC_PER_USER", &cfg.Socket.MaxPCPerUser)
 	applyIntEnv("META_SOCKET_SOCKET_MAX_APP_PER_USER", &cfg.Socket.MaxAppPerUser)
@@ -232,12 +235,13 @@ func applyDurationEnv(name string, target *time.Duration) {
 
 func (c Config) Summary() string {
 	return fmt.Sprintf(
-		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t pebble_enabled=%t profile_enabled=%t",
+		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_room_broadcast_enabled=%t socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t pebble_enabled=%t profile_enabled=%t",
 		c.Service.HTTPAddr,
 		c.Service.HealthPath,
 		c.Socket.Enabled,
 		c.Socket.PrimaryPath,
 		c.Socket.LegacyPath,
+		c.Socket.RoomBroadcastEnabled,
 		c.Socket.MaxConnections,
 		c.Socket.MaxPCPerUser,
 		c.Socket.MaxAppPerUser,
