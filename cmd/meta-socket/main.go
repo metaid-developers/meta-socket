@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/meta-socket/internal/config"
+	metasocket "github.com/metaid-developers/meta-socket/internal/socket"
 )
 
 var version = "dev"
@@ -23,6 +24,20 @@ func main() {
 
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
+
+	if cfg.Socket.Enabled {
+		socketManager, err := metasocket.NewManager(cfg.Socket)
+		if err != nil {
+			log.Fatalf("failed to initialize socket manager: %v", err)
+		}
+		metasocket.SetGlobalManager(socketManager)
+		if err := metasocket.MountRoutes(router, socketManager, cfg.Socket); err != nil {
+			log.Fatalf("failed to mount socket routes: %v", err)
+		}
+		log.Printf("socket service enabled on paths: %s, %s", cfg.Socket.PrimaryPath, cfg.Socket.LegacyPath)
+	} else {
+		log.Printf("socket service disabled by config")
+	}
 
 	router.GET(cfg.Service.HealthPath, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{

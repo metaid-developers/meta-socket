@@ -113,10 +113,10 @@
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/socket/contract.go`
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/socket/routes.go`
 
-- [ ] **Step 1: 迁移连接管理、设备限流、room、extra push 能力**
-- [ ] **Step 2: 同时挂载 `/socket/socket.io` 与 `/socket.io`**
-- [ ] **Step 3: 保持 `message` 事件与 `M/C/D` 字符串化输出兼容**
-- [ ] **Step 4: 保持 `ping -> pong(message)` 行为兼容**
+- [x] **Step 1: 迁移连接管理、设备限流、room、extra push 能力**
+- [x] **Step 2: 同时挂载 `/socket/socket.io` 与 `/socket.io`**
+- [x] **Step 3: 保持 `message` 事件与 `M/C/D` 字符串化输出兼容**
+- [x] **Step 4: 保持 `ping -> pong(message)` 行为兼容**
 
 ### Task 4: 迁移上游 ZMQ + pin 分发闭包
 

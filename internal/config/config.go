@@ -24,9 +24,16 @@ type ServiceConfig struct {
 }
 
 type SocketConfig struct {
-	Enabled     bool   `json:"enabled"`
-	PrimaryPath string `json:"primaryPath"`
-	LegacyPath  string `json:"legacyPath"`
+	Enabled          bool          `json:"enabled"`
+	PrimaryPath      string        `json:"primaryPath"`
+	LegacyPath       string        `json:"legacyPath"`
+	MaxConnections   int           `json:"maxConnections"`
+	MaxPCPerUser     int           `json:"maxPcPerUser"`
+	MaxAppPerUser    int           `json:"maxAppPerUser"`
+	PingInterval     time.Duration `json:"pingInterval"`
+	PingTimeout      time.Duration `json:"pingTimeout"`
+	AllowEIO3        bool          `json:"allowEio3"`
+	ExtraPushAuthKey string        `json:"extraPushAuthKey"`
 }
 
 type ZMQConfig struct {
@@ -62,9 +69,16 @@ func Default() Config {
 			ShutdownTimeout: 10 * time.Second,
 		},
 		Socket: SocketConfig{
-			Enabled:     true,
-			PrimaryPath: "/socket/socket.io",
-			LegacyPath:  "/socket.io",
+			Enabled:          true,
+			PrimaryPath:      "/socket/socket.io",
+			LegacyPath:       "/socket.io",
+			MaxConnections:   10000,
+			MaxPCPerUser:     3,
+			MaxAppPerUser:    3,
+			PingInterval:     2 * time.Second,
+			PingTimeout:      5 * time.Second,
+			AllowEIO3:        true,
+			ExtraPushAuthKey: "",
 		},
 		ZMQ: ZMQConfig{
 			Enabled: false,
@@ -107,6 +121,13 @@ func Load() (Config, error) {
 	applyBoolEnv("META_SOCKET_SOCKET_ENABLED", &cfg.Socket.Enabled)
 	applyStringEnv("META_SOCKET_SOCKET_PATH", &cfg.Socket.PrimaryPath)
 	applyStringEnv("META_SOCKET_SOCKET_LEGACY_PATH", &cfg.Socket.LegacyPath)
+	applyIntEnv("META_SOCKET_SOCKET_MAX_CONNECTIONS", &cfg.Socket.MaxConnections)
+	applyIntEnv("META_SOCKET_SOCKET_MAX_PC_PER_USER", &cfg.Socket.MaxPCPerUser)
+	applyIntEnv("META_SOCKET_SOCKET_MAX_APP_PER_USER", &cfg.Socket.MaxAppPerUser)
+	applyDurationEnv("META_SOCKET_SOCKET_PING_INTERVAL", &cfg.Socket.PingInterval)
+	applyDurationEnv("META_SOCKET_SOCKET_PING_TIMEOUT", &cfg.Socket.PingTimeout)
+	applyBoolEnv("META_SOCKET_SOCKET_ALLOW_EIO3", &cfg.Socket.AllowEIO3)
+	applyStringEnv("META_SOCKET_SOCKET_EXTRA_PUSH_AUTH_KEY", &cfg.Socket.ExtraPushAuthKey)
 
 	applyBoolEnv("META_SOCKET_ZMQ_ENABLED", &cfg.ZMQ.Enabled)
 	applyBoolEnv("META_SOCKET_ZMQ_BTC_ENABLED", &cfg.ZMQ.BTC.Enabled)
@@ -146,6 +167,21 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Socket.LegacyPath) == "" {
 		return errors.New("socket.legacyPath is required")
 	}
+	if c.Socket.MaxConnections <= 0 {
+		return errors.New("socket.maxConnections must be greater than zero")
+	}
+	if c.Socket.MaxPCPerUser <= 0 {
+		return errors.New("socket.maxPcPerUser must be greater than zero")
+	}
+	if c.Socket.MaxAppPerUser <= 0 {
+		return errors.New("socket.maxAppPerUser must be greater than zero")
+	}
+	if c.Socket.PingInterval <= 0 {
+		return errors.New("socket.pingInterval must be greater than zero")
+	}
+	if c.Socket.PingTimeout <= 0 {
+		return errors.New("socket.pingTimeout must be greater than zero")
+	}
 	if c.Service.ShutdownTimeout <= 0 {
 		return errors.New("service.shutdownTimeout must be greater than zero")
 	}
@@ -170,6 +206,18 @@ func applyBoolEnv(name string, target *bool) {
 	*target = parsed
 }
 
+func applyIntEnv(name string, target *int) {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return
+	}
+	*target = parsed
+}
+
 func applyDurationEnv(name string, target *time.Duration) {
 	value, ok := os.LookupEnv(name)
 	if !ok {
@@ -184,12 +232,15 @@ func applyDurationEnv(name string, target *time.Duration) {
 
 func (c Config) Summary() string {
 	return fmt.Sprintf(
-		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s zmq_enabled=%t pebble_enabled=%t profile_enabled=%t",
+		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t pebble_enabled=%t profile_enabled=%t",
 		c.Service.HTTPAddr,
 		c.Service.HealthPath,
 		c.Socket.Enabled,
 		c.Socket.PrimaryPath,
 		c.Socket.LegacyPath,
+		c.Socket.MaxConnections,
+		c.Socket.MaxPCPerUser,
+		c.Socket.MaxAppPerUser,
 		c.ZMQ.Enabled,
 		c.Pebble.Enabled,
 		c.Profile.Enabled,
