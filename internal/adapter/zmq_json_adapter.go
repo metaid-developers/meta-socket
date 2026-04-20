@@ -20,6 +20,15 @@ import (
 
 const defaultProtocolIDHex = "6d6574616964"
 
+var dogeMainNetParams = chaincfg.Params{
+	Name:             "doge-mainnet",
+	Net:              wire.BitcoinNet(0xc0c0c0c0),
+	PubKeyHashAddrID: 0x1e, // D...
+	ScriptHashAddrID: 0x16, // 9...
+	PrivateKeyID:     0x9e,
+	Bech32HRPSegwit:  "doge",
+}
+
 type JSONZMQAdapter struct {
 	chain      string
 	endpoint   string
@@ -208,8 +217,8 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 		return nil
 	}
 
-	txHash := tx.TxHash().String()
-	address, ownerOutIndex := resolvePrimaryOwner(tx)
+	txHash := normalizedTxHashForChain(a.chain, tx)
+	address, ownerOutIndex := resolvePrimaryOwner(a.chain, tx)
 	createMetaID := metaIDFromAddress(address)
 	globalMetaID := createMetaID
 
@@ -262,11 +271,28 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 		}
 	}
 
-	// BTC-like witness inscription path.
-	for inIdx, in := range tx.TxIn {
-		if script := pickWitnessScript(in); len(script) > 0 {
-			if parsed := parseWitnessPin(script, a.protocolID); parsed != nil {
+	if strings.EqualFold(a.chain, "doge") {
+		// Dogecoin supports inscription payloads in ScriptSig / redeem-script flows.
+		for inIdx, in := range tx.TxIn {
+			if in == nil || len(in.SignatureScript) == 0 {
+				continue
+			}
+
+			parsed := parseDogeDirectScriptSigPin(in.SignatureScript)
+			if parsed == nil {
+				parsed = parseDogeRedeemScriptPin(lastPushData(in.SignatureScript), a.protocolID)
+			}
+			if parsed != nil {
 				appendPin(parsed, ownerOutIndex+inIdx+1)
+			}
+		}
+	} else {
+		// BTC-like witness inscription path.
+		for inIdx, in := range tx.TxIn {
+			if script := pickWitnessScript(in); len(script) > 0 {
+				if parsed := parseWitnessPin(script, a.protocolID); parsed != nil {
+					appendPin(parsed, ownerOutIndex+inIdx+1)
+				}
 			}
 		}
 	}
@@ -274,12 +300,20 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 	return pins
 }
 
-func resolvePrimaryOwner(tx *wire.MsgTx) (string, int) {
+func normalizedTxHashForChain(chain string, tx *wire.MsgTx) string {
+	if tx == nil {
+		return ""
+	}
+	// Keep extensibility for chain-specific tx hash rules. For now this preserves existing behavior.
+	return tx.TxHash().String()
+}
+
+func resolvePrimaryOwner(chain string, tx *wire.MsgTx) (string, int) {
 	if tx == nil {
 		return "", 0
 	}
 
-	params := &chaincfg.MainNetParams
+	params := chainAddressParams(chain)
 	for i, out := range tx.TxOut {
 		class, addresses, _, _ := txscript.ExtractPkScriptAddrs(out.PkScript, params)
 		if len(addresses) == 0 {
@@ -298,6 +332,16 @@ func resolvePrimaryOwner(tx *wire.MsgTx) (string, int) {
 		return addresses[0].String(), i
 	}
 	return "", 0
+}
+
+func chainAddressParams(chain string) *chaincfg.Params {
+	switch strings.ToLower(strings.TrimSpace(chain)) {
+	case "doge":
+		return &dogeMainNetParams
+	default:
+		// BTC and MVC both currently use bitcoin-compatible address semantics.
+		return &chaincfg.MainNetParams
+	}
 }
 
 func metaIDFromAddress(address string) string {
@@ -326,6 +370,27 @@ func pickWitnessScript(input *wire.TxIn) []byte {
 		return last
 	}
 	return input.Witness[len(input.Witness)-2]
+}
+
+func lastPushData(script []byte) []byte {
+	if len(script) == 0 {
+		return nil
+	}
+	tokenizer := txscript.MakeScriptTokenizer(0, script)
+	var last []byte
+	for tokenizer.Next() {
+		data := tokenizer.Data()
+		if len(data) == 0 {
+			continue
+		}
+		last = data
+	}
+	if tokenizer.Err() != nil || len(last) == 0 {
+		return nil
+	}
+	item := make([]byte, len(last))
+	copy(item, last)
+	return item
 }
 
 func parseOpReturnPin(script []byte, protocolID []byte) *parsedPin {
@@ -370,6 +435,105 @@ func parseWitnessPin(script []byte, protocolID []byte) *parsedPin {
 		return buildParsedPin(fields)
 	}
 	return nil
+}
+
+func parseDogeRedeemScriptPin(redeemScript []byte, protocolID []byte) *parsedPin {
+	if len(redeemScript) == 0 {
+		return nil
+	}
+	tokenizer := txscript.MakeScriptTokenizer(0, redeemScript)
+
+	// Expected prefix: <pubkey> OP_CHECKSIGVERIFY OP_FALSE OP_IF
+	if !tokenizer.Next() {
+		return nil
+	}
+	if !tokenizer.Next() || tokenizer.Opcode() != txscript.OP_CHECKSIGVERIFY {
+		return nil
+	}
+	if !tokenizer.Next() || tokenizer.Opcode() != txscript.OP_FALSE {
+		return nil
+	}
+	if !tokenizer.Next() || tokenizer.Opcode() != txscript.OP_IF {
+		return nil
+	}
+	if !tokenizer.Next() || !matchProtocol(tokenizer.Data(), protocolID) {
+		return nil
+	}
+
+	fields, ok := collectPinFields(&tokenizer, true)
+	if !ok {
+		return nil
+	}
+	return buildParsedPin(fields)
+}
+
+func parseDogeDirectScriptSigPin(scriptSig []byte) *parsedPin {
+	if len(scriptSig) < 7 {
+		return nil
+	}
+
+	tokenizer := txscript.MakeScriptTokenizer(0, scriptSig)
+	infoList := make([][]byte, 0, 10)
+	for tokenizer.Next() {
+		data := tokenizer.Data()
+		if len(data) == 0 {
+			continue
+		}
+		item := make([]byte, len(data))
+		copy(item, data)
+		infoList = append(infoList, item)
+	}
+	if tokenizer.Err() != nil {
+		return nil
+	}
+	if len(infoList) < 6 {
+		return nil
+	}
+	if !strings.EqualFold(string(infoList[0]), "metaid") {
+		return nil
+	}
+
+	operation := strings.ToLower(string(infoList[1]))
+	if operation == "init" {
+		return &parsedPin{Path: "/"}
+	}
+	if operation != "create" && operation != "modify" && operation != "revoke" {
+		return nil
+	}
+	if operation != "revoke" && len(infoList) < 7 {
+		return nil
+	}
+
+	path := "/info"
+	if len(infoList) > 5 {
+		field := strings.TrimSpace(string(infoList[5]))
+		if field != "" {
+			parts := strings.SplitN(field, ":", 2)
+			if len(parts) == 2 {
+				path = parts[1]
+			} else {
+				path = field
+			}
+		}
+	}
+
+	body := make([]byte, 0, 128)
+	for i := 6; i < len(infoList); i++ {
+		data := infoList[i]
+		// Signature and pubkey tails are not part of content body.
+		if len(data) >= 70 && len(data) <= 73 && data[0] == 0x30 {
+			break
+		}
+		if (len(data) == 33 || len(data) == 65) && (data[0] == 0x02 || data[0] == 0x03 || data[0] == 0x04) {
+			break
+		}
+		body = append(body, data...)
+	}
+
+	return &parsedPin{
+		Path:        strings.ToLower(strings.TrimSpace(path)),
+		ContentBody: body,
+	}
 }
 
 func collectPinFields(tokenizer *txscript.ScriptTokenizer, stopAtEndIf bool) ([][]byte, bool) {
