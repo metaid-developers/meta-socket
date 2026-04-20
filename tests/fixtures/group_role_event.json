@@ -1,0 +1,21 @@
+{
+  "M": "WS_SERVER_NOTIFY_GROUP_ROLE",
+  "C": 0,
+  "D": {
+    "globalMetaId": "id_user_001",
+    "metaId": "meta_user_001",
+    "address": "1ExampleUserAddress",
+    "userInfo": {
+      "name": "member",
+      "avatar": "/avatar/member.png",
+      "chatPublicKey": "02cccc"
+    },
+    "groupId": "group_01",
+    "channelId": "",
+    "isCreator": false,
+    "isAdmin": true,
+    "isBlocked": false,
+    "isWhitelist": true,
+    "isRemoved": false
+  }
+}

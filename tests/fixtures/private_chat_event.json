@@ -1,0 +1,43 @@
+{
+  "M": "WS_SERVER_NOTIFY_PRIVATE_CHAT",
+  "C": 0,
+  "D": {
+    "fromGlobalMetaId": "id_from_001",
+    "from": "meta_from_001",
+    "fromUserInfo": {
+      "name": "alice",
+      "avatar": "/avatar/alice.png",
+      "chatPublicKey": "03aaaa"
+    },
+    "toGlobalMetaId": "id_to_001",
+    "to": "meta_to_001",
+    "toUserInfo": {
+      "name": "bob",
+      "avatar": "/avatar/bob.png",
+      "chatPublicKey": "03bbbb"
+    },
+    "txId": "tx_private_001",
+    "pinId": "pin_private_001",
+    "metaId": "meta_from_001",
+    "address": "1ExampleFromAddress",
+    "userInfo": {
+      "name": "alice",
+      "avatar": "/avatar/alice.png",
+      "chatPublicKey": "03aaaa"
+    },
+    "nickName": "",
+    "protocol": "/protocols/simplemsg",
+    "content": "hello private",
+    "contentType": "text/plain",
+    "encryption": "none",
+    "chatType": 0,
+    "replyPin": "",
+    "replyInfo": null,
+    "replyMetaId": "",
+    "replyGlobalMetaId": "",
+    "timestamp": 1760000001,
+    "chain": "mvc",
+    "blockHeight": 101,
+    "index": 2
+  }
+}

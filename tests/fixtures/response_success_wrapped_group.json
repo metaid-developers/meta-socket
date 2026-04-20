@@ -1,0 +1,23 @@
+{
+  "M": "WS_RESPONSE_SUCCESS",
+  "C": 200,
+  "D": {
+    "data": {
+      "groupId": "group_01",
+      "channelId": "",
+      "metanetId": "group_01",
+      "txId": "tx_group_002",
+      "pinId": "pin_group_002",
+      "globalMetaId": "id_sender_002",
+      "metaId": "meta_sender_002",
+      "address": "1ExampleSenderAddress2",
+      "protocol": "/protocols/simplegroupchat",
+      "content": "wrapped group payload",
+      "contentType": "text/plain",
+      "encryption": "none",
+      "chatType": 0,
+      "timestamp": 1760000002,
+      "chain": "mvc"
+    }
+  }
+}

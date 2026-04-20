@@ -1,0 +1,34 @@
+{
+  "M": "WS_SERVER_NOTIFY_GROUP_CHAT",
+  "C": 0,
+  "D": {
+    "groupId": "group_01",
+    "channelId": "",
+    "metanetId": "group_01",
+    "txId": "tx_group_001",
+    "pinId": "pin_group_001",
+    "globalMetaId": "id_sender_001",
+    "metaId": "meta_sender_001",
+    "address": "1ExampleSenderAddress",
+    "userInfo": {
+      "name": "sender",
+      "avatar": "/avatar/sender.png",
+      "chatPublicKey": "02abcdef"
+    },
+    "nickName": "sender",
+    "protocol": "/protocols/simplegroupchat",
+    "content": "hello group",
+    "contentType": "text/plain",
+    "encryption": "none",
+    "chatType": 0,
+    "replyPin": "",
+    "replyInfo": null,
+    "replyMetaId": "",
+    "replyGlobalMetaId": "",
+    "mention": [],
+    "timestamp": 1760000000,
+    "chain": "mvc",
+    "blockHeight": 100,
+    "index": 1
+  }
+}
