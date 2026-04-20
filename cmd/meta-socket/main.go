@@ -40,6 +40,9 @@ func main() {
 		if err := metasocket.MountRoutes(router, socketManager, cfg.Socket); err != nil {
 			log.Fatalf("failed to mount socket routes: %v", err)
 		}
+		if err := metasocket.MountOnlineRoutes(router, socketManager); err != nil {
+			log.Fatalf("failed to mount socket online routes: %v", err)
+		}
 		log.Printf("socket service enabled on paths: %s, %s", cfg.Socket.PrimaryPath, cfg.Socket.LegacyPath)
 	} else {
 		log.Printf("socket service disabled by config")
