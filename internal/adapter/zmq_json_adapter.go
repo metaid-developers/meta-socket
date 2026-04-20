@@ -15,6 +15,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/metaid-developers/meta-socket/internal/idaddress"
 	zmq "github.com/pebbe/zmq4"
 )
 
@@ -218,15 +219,10 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 	}
 
 	txHash := normalizedTxHashForChain(a.chain, tx)
-	address, ownerOutIndex := resolvePrimaryOwner(a.chain, tx)
-	createMetaID := metaIDFromAddress(address)
-	globalMetaID := createMetaID
 
 	pins := make([]*PinRecord, 0)
-	usedIDs := make(map[string]struct{})
-	nextPinIndex := ownerOutIndex
 
-	appendPin := func(parsed *parsedPin, sourceIndex int) {
+	appendPin := func(parsed *parsedPin, pinIndex int, ownerAddress string) {
 		if parsed == nil {
 			return
 		}
@@ -239,18 +235,18 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 			path = "/" + path
 		}
 
-		pinIndex := sourceIndex
 		if pinIndex < 0 {
-			pinIndex = nextPinIndex
-			nextPinIndex++
+			pinIndex = 0
 		}
+
+		createMetaID := metaIDFromAddress(ownerAddress)
+		globalMetaID := globalMetaIDFromAddress(ownerAddress)
+		if globalMetaID == "" {
+			// Keep compatibility with previous fallback behavior when conversion fails.
+			globalMetaID = createMetaID
+		}
+
 		pinID := fmt.Sprintf("%si%d", txHash, pinIndex)
-		if _, exists := usedIDs[pinID]; exists {
-			// Keep IDs unique even when source indices collide between witness and OP_RETURN branches.
-			pinID = fmt.Sprintf("%si%d", txHash, nextPinIndex)
-			nextPinIndex++
-		}
-		usedIDs[pinID] = struct{}{}
 
 		pins = append(pins, &PinRecord{
 			ID:            pinID,
@@ -258,17 +254,27 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 			MetaID:        createMetaID,
 			CreateMetaID:  createMetaID,
 			GlobalMetaID:  globalMetaID,
-			CreateAddress: address,
+			CreateAddress: ownerAddress,
 			ChainName:     a.chain,
 			ContentBody:   json.RawMessage(parsed.ContentBody),
 		})
 	}
 
-	// MVC-like OP_RETURN inscription path.
-	for outIdx, out := range tx.TxOut {
+	// Legacy behavior: once OP_RETURN pin is found, it takes priority and short-circuits.
+	for _, out := range tx.TxOut {
 		if parsed := parseOpReturnPin(out.PkScript, a.protocolID); parsed != nil {
-			appendPin(parsed, outIdx)
+			ownerAddress, ownerOutIdx := resolveOpReturnOwner(a.chain, tx)
+			if ownerAddress == "" {
+				ownerAddress, ownerOutIdx = resolveInputOwner(a.chain, tx, 0)
+			}
+			appendPin(parsed, ownerOutIdx, ownerAddress)
+			return pins
 		}
+	}
+
+	// Legacy MVC parser only accepts OP_RETURN inscriptions.
+	if strings.EqualFold(a.chain, "mvc") {
+		return pins
 	}
 
 	if strings.EqualFold(a.chain, "doge") {
@@ -283,7 +289,8 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 				parsed = parseDogeRedeemScriptPin(lastPushData(in.SignatureScript), a.protocolID)
 			}
 			if parsed != nil {
-				appendPin(parsed, ownerOutIndex+inIdx+1)
+				ownerAddress, ownerOutIdx := resolveInputOwner(a.chain, tx, inIdx)
+				appendPin(parsed, ownerOutIdx, ownerAddress)
 			}
 		}
 	} else {
@@ -291,7 +298,8 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 		for inIdx, in := range tx.TxIn {
 			if script := pickWitnessScript(in); len(script) > 0 {
 				if parsed := parseWitnessPin(script, a.protocolID); parsed != nil {
-					appendPin(parsed, ownerOutIndex+inIdx+1)
+					ownerAddress, ownerOutIdx := resolveInputOwner(a.chain, tx, inIdx)
+					appendPin(parsed, ownerOutIdx, ownerAddress)
 				}
 			}
 		}
@@ -304,34 +312,89 @@ func normalizedTxHashForChain(chain string, tx *wire.MsgTx) string {
 	if tx == nil {
 		return ""
 	}
-	// Keep extensibility for chain-specific tx hash rules. For now this preserves existing behavior.
+	if strings.EqualFold(chain, "mvc") {
+		return mvcNormalizedTxHash(tx)
+	}
 	return tx.TxHash().String()
 }
 
-func resolvePrimaryOwner(chain string, tx *wire.MsgTx) (string, int) {
+func mvcNormalizedTxHash(tx *wire.MsgTx) string {
+	if tx == nil {
+		return ""
+	}
+	value, err := mvcGetNewHash(tx)
+	if err != nil {
+		return tx.TxHash().String()
+	}
+	return value
+}
+
+func resolveOpReturnOwner(chain string, tx *wire.MsgTx) (string, int) {
 	if tx == nil {
 		return "", 0
 	}
 
 	params := chainAddressParams(chain)
+	if strings.EqualFold(chain, "mvc") {
+		// Legacy MVC op-return ownership resolves to first standard output.
+		for i, out := range tx.TxOut {
+			class, addresses, _, _ := txscript.ExtractPkScriptAddrs(out.PkScript, params)
+			if class != txscript.NullDataTy && class != txscript.NonStandardTy && len(addresses) > 0 {
+				return addresses[0].String(), i
+			}
+		}
+		return "", 0
+	}
+
+	// Legacy BTC/DOGE op-return ownership resolves to the last standard output.
+	ownerAddress := ""
+	ownerIndex := 0
 	for i, out := range tx.TxOut {
 		class, addresses, _, _ := txscript.ExtractPkScriptAddrs(out.PkScript, params)
-		if len(addresses) == 0 {
-			continue
-		}
-		// Prefer non-null-data outputs when possible.
-		if class.String() != "nulldata" {
-			return addresses[0].String(), i
+		if class != txscript.NonStandardTy && len(addresses) > 0 {
+			ownerAddress = addresses[0].String()
+			ownerIndex = i
 		}
 	}
-	for i, out := range tx.TxOut {
-		_, addresses, _, _ := txscript.ExtractPkScriptAddrs(out.PkScript, params)
-		if len(addresses) == 0 {
-			continue
+	return ownerAddress, ownerIndex
+}
+
+func resolveInputOwner(chain string, tx *wire.MsgTx, inIdx int) (string, int) {
+	if tx == nil || len(tx.TxOut) == 0 {
+		return "", 0
+	}
+
+	params := chainAddressParams(chain)
+	if len(tx.TxIn) == 1 || len(tx.TxOut) == 1 || inIdx <= 0 {
+		if address := extractAddress(tx.TxOut[0].PkScript, params); address != "" {
+			return address, 0
 		}
-		return addresses[0].String(), i
+		return "", 0
+	}
+
+	// Legacy GetPinOwner depends on prevout values; here we keep deterministic index-aware fallback.
+	candidate := inIdx
+	if candidate >= len(tx.TxOut) {
+		candidate = len(tx.TxOut) - 1
+	}
+	if address := extractAddress(tx.TxOut[candidate].PkScript, params); address != "" {
+		return address, candidate
+	}
+
+	for i, out := range tx.TxOut {
+		if address := extractAddress(out.PkScript, params); address != "" {
+			return address, i
+		}
 	}
 	return "", 0
+}
+
+func extractAddress(pkScript []byte, params *chaincfg.Params) string {
+	_, addresses, _, _ := txscript.ExtractPkScriptAddrs(pkScript, params)
+	if len(addresses) == 0 {
+		return ""
+	}
+	return addresses[0].String()
 }
 
 func chainAddressParams(chain string) *chaincfg.Params {
@@ -351,6 +414,18 @@ func metaIDFromAddress(address string) string {
 	}
 	sum := sha256.Sum256([]byte(address))
 	return hex.EncodeToString(sum[:])
+}
+
+func globalMetaIDFromAddress(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	value, err := idaddress.ConvertFromBitcoin(address)
+	if err != nil {
+		return ""
+	}
+	return value
 }
 
 func splitHostAndPath(raw string) (string, string) {

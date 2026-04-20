@@ -8,6 +8,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -187,6 +188,115 @@ func TestJSONZMQAdapterDecodeFramesRawTxDogeRedeemScript(t *testing.T) {
 	}
 }
 
+func TestMVCNormalizedTxHashVersion10MatchesLegacyRule(t *testing.T) {
+	tx := wire.NewMsgTx(10)
+	inHash1, err := chainhash.NewHashFromStr("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+	if err != nil {
+		t.Fatalf("parse hash1: %v", err)
+	}
+	inHash2, err := chainhash.NewHashFromStr("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")
+	if err != nil {
+		t.Fatalf("parse hash2: %v", err)
+	}
+	tx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: *inHash1, Index: 1},
+		SignatureScript:  []byte{0x51, 0x21, 0x02, 0xab, 0xcd},
+		Sequence:         0xfffffffe,
+	})
+	tx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: *inHash2, Index: 2},
+		SignatureScript:  []byte{0x00, 0x63, 0x6d, 0x65, 0x74, 0x61, 0x69, 0x64},
+		Sequence:         0xfffffffd,
+	})
+	tx.AddTxOut(&wire.TxOut{Value: 12345, PkScript: []byte{0x51}})
+	tx.AddTxOut(&wire.TxOut{Value: 67890, PkScript: []byte{0x6a, 0x02, 0x6d, 0x65}})
+	tx.LockTime = 9
+
+	got := normalizedTxHashForChain("mvc", tx)
+	const legacyWant = "696850ef759535843631d317d655b225a5d4f0cdcb25f32a3b02a4dea2e67b2f"
+	if got != legacyWant {
+		t.Fatalf("mvc normalized hash mismatch: got=%s want=%s", got, legacyWant)
+	}
+	if got == tx.TxHash().String() {
+		t.Fatalf("expected mvc normalized hash to differ from standard tx hash for version>=10")
+	}
+}
+
+func TestJSONZMQAdapterRawTxOpReturnPriorityShortCircuit(t *testing.T) {
+	adapter := NewJSONZMQAdapter("btc", "tcp://127.0.0.1:15555", "rawtx")
+
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{
+		Witness: wire.TxWitness{
+			[]byte{0x01},
+			mustWitnessPinScript(t, "/protocols/simplemsg", []byte(`{"from":"m1","to":"m2","content":"hi"}`)),
+		},
+	})
+
+	opReturnScript, err := txscript.NewScriptBuilder().
+		AddOp(txscript.OP_RETURN).
+		AddData([]byte("metaid")).
+		AddData([]byte("create")).
+		AddData([]byte("/protocols/simplegroupchat")).
+		AddData([]byte("0")).
+		AddData([]byte("0")).
+		AddData([]byte("application/json")).
+		AddData([]byte(`{"groupId":"g1","content":"from-op-return"}`)).
+		Script()
+	if err != nil {
+		t.Fatalf("build op_return: %v", err)
+	}
+	tx.AddTxOut(&wire.TxOut{Value: 0, PkScript: opReturnScript})
+	tx.AddTxOut(&wire.TxOut{
+		Value:    1000,
+		PkScript: mustP2PKHScriptFromHash(t, bytes.Repeat([]byte{0x31}, 20), chainAddressParams("btc")),
+	})
+
+	msg, ok := adapter.decodeFrames([][]byte{
+		[]byte("rawtx"),
+		mustSerializeTx(t, tx),
+		[]byte{0x01, 0x00, 0x00, 0x00},
+	})
+	if !ok {
+		t.Fatalf("expected frame to decode")
+	}
+	if len(msg.PinList) != 1 {
+		t.Fatalf("expected one pin due to op_return short-circuit, got %d", len(msg.PinList))
+	}
+	pin := msg.PinList[0]
+	if pin.Path != "/protocols/simplegroupchat" {
+		t.Fatalf("expected op_return pin path, got %s", pin.Path)
+	}
+	if !strings.HasSuffix(pin.ID, "i1") {
+		t.Fatalf("expected op_return owner outIdx to be used in pin id, got %s", pin.ID)
+	}
+	if !strings.HasPrefix(pin.GlobalMetaID, "id") {
+		t.Fatalf("expected converted globalMetaId, got %s", pin.GlobalMetaID)
+	}
+}
+
+func TestResolveOpReturnOwnerCompatibilityRules(t *testing.T) {
+	tx := wire.NewMsgTx(1)
+	tx.AddTxOut(&wire.TxOut{
+		Value:    1000,
+		PkScript: mustP2PKHScriptFromHash(t, bytes.Repeat([]byte{0x11}, 20), chainAddressParams("btc")),
+	})
+	tx.AddTxOut(&wire.TxOut{
+		Value:    2000,
+		PkScript: mustP2PKHScriptFromHash(t, bytes.Repeat([]byte{0x22}, 20), chainAddressParams("btc")),
+	})
+
+	btcOwner, btcIdx := resolveOpReturnOwner("btc", tx)
+	if btcOwner == "" || btcIdx != 1 {
+		t.Fatalf("expected btc op_return owner from last standard output, got owner=%s idx=%d", btcOwner, btcIdx)
+	}
+
+	mvcOwner, mvcIdx := resolveOpReturnOwner("mvc", tx)
+	if mvcOwner == "" || mvcIdx != 0 {
+		t.Fatalf("expected mvc op_return owner from first standard output, got owner=%s idx=%d", mvcOwner, mvcIdx)
+	}
+}
+
 type byteSliceWriter struct {
 	dst *[]byte
 }
@@ -219,6 +329,26 @@ func mustP2PKHScriptFromHash(t *testing.T, hash160 []byte, params *chaincfg.Para
 	script, err := txscript.PayToAddrScript(addr)
 	if err != nil {
 		t.Fatalf("pay-to-addr script: %v", err)
+	}
+	return script
+}
+
+func mustWitnessPinScript(t *testing.T, path string, body []byte) []byte {
+	t.Helper()
+	script, err := txscript.NewScriptBuilder().
+		AddOp(txscript.OP_FALSE).
+		AddOp(txscript.OP_IF).
+		AddData([]byte("metaid")).
+		AddData([]byte("create")).
+		AddData([]byte(path)).
+		AddData([]byte("0")).
+		AddData([]byte("0")).
+		AddData([]byte("application/json")).
+		AddData(body).
+		AddOp(txscript.OP_ENDIF).
+		Script()
+	if err != nil {
+		t.Fatalf("build witness script: %v", err)
 	}
 	return script
 }
