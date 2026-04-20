@@ -1,6 +1,8 @@
 package push
 
 import (
+	"strings"
+
 	"github.com/metaid-developers/meta-socket/internal/groupchat/db"
 	"github.com/metaid-developers/meta-socket/internal/socket"
 )
@@ -271,16 +273,22 @@ func wsPostGroupMsg(chat *db.TalkGroupChatV3) {
 		return
 	}
 
+	joinedCount := TrackGroupMembershipBatch(
+		chat.GroupID,
+		mergeUnique(chat.RecipientMetaIDs, []string{chat.MetaID}),
+		mergeUnique(chat.RecipientGlobalMetaIDs, []string{chat.GlobalMetaID}),
+	)
+	joinedCount += JoinKnownGroupMembers(chat.GroupID)
+
 	sentByRoom := false
-	if RoomBroadcastEnabled() && chat.GroupID != "" && HasKnownMembers(chat.GroupID) {
+	if RoomBroadcastEnabled() && chat.GroupID != "" && joinedCount > 0 {
 		if err := SendGroupMessageToRoom(chat.GroupID, envelope.M, mustCode(envelope.C), envelope.D); err == nil {
 			sentByRoom = true
 		}
 	}
 
 	if !sentByRoom {
-		targetMetaIDs := mergeUnique(chat.RecipientMetaIDs, []string{chat.MetaID})
-		targetGlobalMetaIDs := mergeUnique(chat.RecipientGlobalMetaIDs, []string{chat.GlobalMetaID})
+		targetMetaIDs, targetGlobalMetaIDs := buildGroupFallbackTargets(chat)
 		_ = SendMessageToTargets(targetMetaIDs, targetGlobalMetaIDs, envelope.M, mustCode(envelope.C), envelope.D)
 	}
 
@@ -337,6 +345,29 @@ func mustCode(value interface{}) int {
 		return code
 	}
 	return socket.WS_CODE_SERVER
+}
+
+func buildGroupFallbackTargets(chat *db.TalkGroupChatV3) ([]string, []string) {
+	if chat == nil {
+		return nil, nil
+	}
+
+	targetMetaIDs := mergeUnique(chat.RecipientMetaIDs, []string{chat.MetaID})
+	targetGlobalMetaIDs := mergeUnique(chat.RecipientGlobalMetaIDs, []string{chat.GlobalMetaID})
+
+	for _, identity := range KnownGroupMembers(chat.GroupID) {
+		if looksLikeGlobalIdentity(identity) {
+			targetGlobalMetaIDs = mergeUnique(targetGlobalMetaIDs, []string{identity})
+			continue
+		}
+		targetMetaIDs = mergeUnique(targetMetaIDs, []string{identity})
+	}
+
+	return targetMetaIDs, targetGlobalMetaIDs
+}
+
+func looksLikeGlobalIdentity(identity string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(identity)), "id")
 }
 
 func toUserInfo(info *db.UserInfo) *UserInfo {

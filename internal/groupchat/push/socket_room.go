@@ -50,8 +50,41 @@ func TrackGroupMembership(metaID, globalMetaID, groupID string, removed bool) {
 	}
 }
 
+func TrackGroupMembershipBatch(groupID string, metaIDs, globalMetaIDs []string) int {
+	if groupID == "" {
+		return 0
+	}
+	identities := mergeUnique(metaIDs, globalMetaIDs)
+	if len(identities) == 0 {
+		return 0
+	}
+
+	membershipStore.add(groupID, identities...)
+
+	joined := 0
+	for _, identity := range identities {
+		joined += JoinGroupRoomForUser(identity, groupID)
+	}
+	return joined
+}
+
 func HasKnownMembers(groupID string) bool {
 	return membershipStore.hasGroupMembers(groupID)
+}
+
+func KnownGroupMembers(groupID string) []string {
+	return membershipStore.membersForGroup(groupID)
+}
+
+func JoinKnownGroupMembers(groupID string) int {
+	if groupID == "" {
+		return 0
+	}
+	joined := 0
+	for _, identity := range KnownGroupMembers(groupID) {
+		joined += JoinGroupRoomForUser(identity, groupID)
+	}
+	return joined
 }
 
 func joinGroupRoomsForClient(metaID string, client *socketio.Socket) {
@@ -138,4 +171,27 @@ func (s *roomMembershipStore) hasGroupMembers(groupID string) bool {
 
 	set, ok := s.groupIdentities[groupID]
 	return ok && len(set) > 0
+}
+
+func (s *roomMembershipStore) membersForGroup(groupID string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	set, ok := s.groupIdentities[groupID]
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(set))
+	for identity := range set {
+		result = append(result, identity)
+	}
+	return result
+}
+
+func resetMembershipStoreForTest() {
+	membershipStore.mu.Lock()
+	defer membershipStore.mu.Unlock()
+
+	membershipStore.identityGroups = make(map[string]map[string]struct{})
+	membershipStore.groupIdentities = make(map[string]map[string]struct{})
 }
