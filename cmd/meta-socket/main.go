@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os/signal"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/metaid-developers/meta-socket/internal/adapter"
 	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/meta-socket/internal/pipeline"
 	metasocket "github.com/metaid-developers/meta-socket/internal/socket"
 )
 
@@ -25,6 +28,9 @@ func main() {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 
+	var zmqRunner *pipeline.ZMQRunner
+	var stopPipeline context.CancelFunc
+
 	if cfg.Socket.Enabled {
 		socketManager, err := metasocket.NewManager(cfg.Socket)
 		if err != nil {
@@ -37,6 +43,39 @@ func main() {
 		log.Printf("socket service enabled on paths: %s, %s", cfg.Socket.PrimaryPath, cfg.Socket.LegacyPath)
 	} else {
 		log.Printf("socket service disabled by config")
+	}
+
+	if cfg.ZMQ.Enabled {
+		handlers := pipeline.RouterHandlers{
+			OnGroup: func(pin *adapter.PinRecord, tx json.RawMessage) error {
+				log.Printf("[PIPELINE] group pin routed: chain=%s pinId=%s path=%s globalMetaId=%s", pin.ChainName, pin.ID, pin.Path, pin.GlobalMetaID)
+				return nil
+			},
+			OnPrivate: func(pin *adapter.PinRecord, tx json.RawMessage) error {
+				log.Printf("[PIPELINE] private pin routed: chain=%s pinId=%s path=%s globalMetaId=%s", pin.ChainName, pin.ID, pin.Path, pin.GlobalMetaID)
+				return nil
+			},
+			OnGroupRole: func(pin *adapter.PinRecord, tx json.RawMessage) error {
+				log.Printf("[PIPELINE] group-role pin routed: chain=%s pinId=%s path=%s globalMetaId=%s", pin.ChainName, pin.ID, pin.Path, pin.GlobalMetaID)
+				return nil
+			},
+		}
+		pinRouter := pipeline.NewPinRouter(nil, handlers)
+		zmqRunner = pipeline.NewZMQRunner(pinRouter)
+
+		enabledAdapters := pipeline.BuildEnabledAdapters(cfg.ZMQ)
+		for _, item := range enabledAdapters {
+			zmqRunner.RegisterAdapter(item)
+		}
+
+		runCtx, cancel := context.WithCancel(context.Background())
+		stopPipeline = cancel
+		if err := zmqRunner.Start(runCtx); err != nil {
+			log.Fatalf("failed to start zmq runner: %v", err)
+		}
+		log.Printf("zmq pipeline enabled: adapters=%d", len(enabledAdapters))
+	} else {
+		log.Printf("zmq pipeline disabled by config")
 	}
 
 	router.GET(cfg.Service.HealthPath, func(c *gin.Context) {
@@ -71,6 +110,13 @@ func main() {
 			log.Fatalf("server exited unexpectedly: %v", err)
 		}
 	case <-shutdownCtx.Done():
+	}
+
+	if stopPipeline != nil {
+		stopPipeline()
+	}
+	if zmqRunner != nil {
+		zmqRunner.Wait()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Service.ShutdownTimeout)

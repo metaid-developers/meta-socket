@@ -125,9 +125,10 @@
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/pipeline/pin_router.go`
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/adapter/*`
 
-- [ ] **Step 1: 接入 BTC/MVC/DOGE 的 `ZmqRun` 能力**
-- [ ] **Step 2: 打通 `pin -> group/private/role` 最小分发链路**
-- [ ] **Step 3: 保留 `globalMetaId` 计算与映射兼容逻辑**
+- [x] **Step 1: 接入 BTC/MVC/DOGE 的 `ZmqRun` 能力**
+- [x] **Step 2: 打通 `pin -> group/private/role` 最小分发链路**
+- [x] **Step 3: 保留 `globalMetaId` 计算与映射兼容逻辑**
+  - 当前实现先采用 JSON ZMQ payload 适配层（`pinList + tx`）作为可运行最小闭包，rawtx 解析器将在后续迭代补齐以对齐旧服务链上抓取细节。
 
 ### Task 5: 迁移 group/private/role 推送链路
 
