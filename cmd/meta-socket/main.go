@@ -12,7 +12,7 @@ import (
 
 	"github.com/metaid-developers/meta-socket/internal/config"
 	groupchatdb "github.com/metaid-developers/meta-socket/internal/groupchat/db"
-	groupchatpush "github.com/metaid-developers/meta-socket/internal/groupchat/push"
+	groupchatservice "github.com/metaid-developers/meta-socket/internal/groupchat/service"
 	"github.com/metaid-developers/meta-socket/internal/pipeline"
 	metasocket "github.com/metaid-developers/meta-socket/internal/socket"
 )
@@ -45,10 +45,11 @@ func main() {
 		log.Printf("socket service disabled by config")
 	}
 
-	groupchatpush.Configure(groupchatpush.ServiceConfig{
-		RoomBroadcastEnabled: cfg.Socket.RoomBroadcastEnabled,
-	})
-	groupchatpush.RegisterDBHooks()
+	groupInitReport, err := groupchatservice.Init(cfg)
+	if err != nil {
+		log.Fatalf("failed to initialize groupchat service: %v", err)
+	}
+	log.Printf("groupchat init finished: excluded=%v", groupInitReport.ExcludedModules)
 
 	if cfg.ZMQ.Enabled {
 		groupProcessor := groupchatdb.NewProcessor()

@@ -150,9 +150,9 @@
 - Modify: `/Users/tusm/Documents/MetaID_Projects/meta-socket/internal/groupchat/service/init.go`
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/docs/compat/p0-excluded-modules.md`
 
-- [ ] **Step 1: 从初始化链路移除 luckybag/grpc/重型 DB API 依赖**
-- [ ] **Step 2: 将迁移/备份做成可开关（默认开启迁移，备份可选）**
-- [ ] **Step 3: 明确记录 P0 排除项与后续补齐策略**
+- [x] **Step 1: 从初始化链路移除 luckybag/grpc/重型 DB API 依赖**
+- [x] **Step 2: 将迁移/备份做成可开关（默认开启迁移，备份可选）**
+- [x] **Step 3: 明确记录 P0 排除项与后续补齐策略**
 
 ### Task 7: 完成契约测试与双跑对比
 

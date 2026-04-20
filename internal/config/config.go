@@ -10,11 +10,12 @@ import (
 )
 
 type Config struct {
-	Service ServiceConfig `json:"service"`
-	Socket  SocketConfig  `json:"socket"`
-	ZMQ     ZMQConfig     `json:"zmq"`
-	Pebble  PebbleConfig  `json:"pebble"`
-	Profile ProfileConfig `json:"profile"`
+	Service   ServiceConfig   `json:"service"`
+	Socket    SocketConfig    `json:"socket"`
+	ZMQ       ZMQConfig       `json:"zmq"`
+	Pebble    PebbleConfig    `json:"pebble"`
+	Profile   ProfileConfig   `json:"profile"`
+	GroupChat GroupChatConfig `json:"groupChat"`
 }
 
 type ServiceConfig struct {
@@ -60,6 +61,16 @@ type ProfileConfig struct {
 	Mode                string `json:"mode"`
 	RemoteBaseURL       string `json:"remoteBaseURL"`
 	AllowRemoteFallback bool   `json:"allowRemoteFallback"`
+}
+
+type GroupChatConfig struct {
+	MigrationEnabled bool `json:"migrationEnabled"`
+	BackupEnabled    bool `json:"backupEnabled"`
+
+	// P0 explicit exclusions (default disabled).
+	LuckyBagEnabled bool `json:"luckyBagEnabled"`
+	GRPCEnabled     bool `json:"grpcEnabled"`
+	HeavyAPIEnabled bool `json:"heavyApiEnabled"`
 }
 
 func Default() Config {
@@ -110,6 +121,13 @@ func Default() Config {
 			RemoteBaseURL:       "",
 			AllowRemoteFallback: true,
 		},
+		GroupChat: GroupChatConfig{
+			MigrationEnabled: true,
+			BackupEnabled:    false,
+			LuckyBagEnabled:  false,
+			GRPCEnabled:      false,
+			HeavyAPIEnabled:  false,
+		},
 	}
 }
 
@@ -150,6 +168,12 @@ func Load() (Config, error) {
 	applyStringEnv("META_SOCKET_PROFILE_MODE", &cfg.Profile.Mode)
 	applyStringEnv("META_SOCKET_PROFILE_REMOTE_BASE_URL", &cfg.Profile.RemoteBaseURL)
 	applyBoolEnv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", &cfg.Profile.AllowRemoteFallback)
+
+	applyBoolEnv("META_SOCKET_GROUPCHAT_MIGRATION_ENABLED", &cfg.GroupChat.MigrationEnabled)
+	applyBoolEnv("META_SOCKET_GROUPCHAT_BACKUP_ENABLED", &cfg.GroupChat.BackupEnabled)
+	applyBoolEnv("META_SOCKET_GROUPCHAT_LUCKYBAG_ENABLED", &cfg.GroupChat.LuckyBagEnabled)
+	applyBoolEnv("META_SOCKET_GROUPCHAT_GRPC_ENABLED", &cfg.GroupChat.GRPCEnabled)
+	applyBoolEnv("META_SOCKET_GROUPCHAT_HEAVY_API_ENABLED", &cfg.GroupChat.HeavyAPIEnabled)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -235,7 +259,7 @@ func applyDurationEnv(name string, target *time.Duration) {
 
 func (c Config) Summary() string {
 	return fmt.Sprintf(
-		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_room_broadcast_enabled=%t socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t pebble_enabled=%t profile_enabled=%t",
+		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_room_broadcast_enabled=%t socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t pebble_enabled=%t profile_enabled=%t groupchat_migration_enabled=%t groupchat_backup_enabled=%t",
 		c.Service.HTTPAddr,
 		c.Service.HealthPath,
 		c.Socket.Enabled,
@@ -248,5 +272,7 @@ func (c Config) Summary() string {
 		c.ZMQ.Enabled,
 		c.Pebble.Enabled,
 		c.Profile.Enabled,
+		c.GroupChat.MigrationEnabled,
+		c.GroupChat.BackupEnabled,
 	)
 }
