@@ -81,13 +81,32 @@ func (r *ZMQRunner) consume(ctx context.Context) {
 func BuildEnabledAdapters(cfg config.ZMQConfig) []adapter.ChainZMQAdapter {
 	items := make([]adapter.ChainZMQAdapter, 0, 3)
 	if cfg.BTC.Enabled {
-		items = append(items, adapter.NewBTCZMQAdapter(cfg.BTC.Endpoint, cfg.BTC.Topic))
+		items = append(items, adapter.NewBTCZMQAdapter(cfg.BTC.Endpoint, cfg.BTC.Topic, buildAdapterOptions("btc", cfg.BTC)...))
 	}
 	if cfg.MVC.Enabled {
-		items = append(items, adapter.NewMVCZMQAdapter(cfg.MVC.Endpoint, cfg.MVC.Topic))
+		items = append(items, adapter.NewMVCZMQAdapter(cfg.MVC.Endpoint, cfg.MVC.Topic, buildAdapterOptions("mvc", cfg.MVC)...))
 	}
 	if cfg.DOGE.Enabled {
-		items = append(items, adapter.NewDOGEZMQAdapter(cfg.DOGE.Endpoint, cfg.DOGE.Topic))
+		items = append(items, adapter.NewDOGEZMQAdapter(cfg.DOGE.Endpoint, cfg.DOGE.Topic, buildAdapterOptions("doge", cfg.DOGE)...))
 	}
 	return items
+}
+
+func buildAdapterOptions(chain string, item config.ChainZMQConfig) []adapter.JSONZMQAdapterOption {
+	options := make([]adapter.JSONZMQAdapterOption, 0, 1)
+	lookup, err := adapter.NewRPCPrevoutValueLookup(
+		item.RPCHost,
+		item.RPCUser,
+		item.RPCPass,
+		item.RPCHTTPPostMode,
+		item.RPCDisableTLS,
+	)
+	if err != nil {
+		log.Printf("[ZMQ] chain=%s init rpc prevout lookup failed, fallback to heuristic owner mapping: %v", chain, err)
+		return options
+	}
+	if lookup != nil {
+		options = append(options, adapter.WithPrevoutValueLookup(lookup))
+	}
+	return options
 }

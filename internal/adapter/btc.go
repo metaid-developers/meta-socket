@@ -1,5 +1,5 @@
 package adapter
 
-func NewBTCZMQAdapter(endpoint, topic string) ChainZMQAdapter {
-	return NewJSONZMQAdapter("btc", endpoint, topic)
+func NewBTCZMQAdapter(endpoint, topic string, options ...JSONZMQAdapterOption) ChainZMQAdapter {
+	return NewJSONZMQAdapter("btc", endpoint, topic, options...)
 }

@@ -1,5 +1,5 @@
 package adapter
 
-func NewMVCZMQAdapter(endpoint, topic string) ChainZMQAdapter {
-	return NewJSONZMQAdapter("mvc", endpoint, topic)
+func NewMVCZMQAdapter(endpoint, topic string, options ...JSONZMQAdapterOption) ChainZMQAdapter {
+	return NewJSONZMQAdapter("mvc", endpoint, topic, options...)
 }

@@ -46,9 +46,14 @@ type ZMQConfig struct {
 }
 
 type ChainZMQConfig struct {
-	Enabled  bool   `json:"enabled"`
-	Endpoint string `json:"endpoint"`
-	Topic    string `json:"topic"`
+	Enabled         bool   `json:"enabled"`
+	Endpoint        string `json:"endpoint"`
+	Topic           string `json:"topic"`
+	RPCHost         string `json:"rpcHost"`
+	RPCUser         string `json:"rpcUser"`
+	RPCPass         string `json:"rpcPass"`
+	RPCHTTPPostMode bool   `json:"rpcHttpPostMode"`
+	RPCDisableTLS   bool   `json:"rpcDisableTls"`
 }
 
 type PebbleConfig struct {
@@ -96,19 +101,34 @@ func Default() Config {
 		ZMQ: ZMQConfig{
 			Enabled: false,
 			BTC: ChainZMQConfig{
-				Enabled:  false,
-				Endpoint: "",
-				Topic:    "rawtx",
+				Enabled:         false,
+				Endpoint:        "",
+				Topic:           "rawtx",
+				RPCHost:         "",
+				RPCUser:         "",
+				RPCPass:         "",
+				RPCHTTPPostMode: true,
+				RPCDisableTLS:   true,
 			},
 			MVC: ChainZMQConfig{
-				Enabled:  false,
-				Endpoint: "",
-				Topic:    "rawtx",
+				Enabled:         false,
+				Endpoint:        "",
+				Topic:           "rawtx",
+				RPCHost:         "",
+				RPCUser:         "",
+				RPCPass:         "",
+				RPCHTTPPostMode: true,
+				RPCDisableTLS:   true,
 			},
 			DOGE: ChainZMQConfig{
-				Enabled:  false,
-				Endpoint: "",
-				Topic:    "rawtx",
+				Enabled:         false,
+				Endpoint:        "",
+				Topic:           "rawtx",
+				RPCHost:         "",
+				RPCUser:         "",
+				RPCPass:         "",
+				RPCHTTPPostMode: true,
+				RPCDisableTLS:   true,
 			},
 		},
 		Pebble: PebbleConfig{
@@ -154,12 +174,27 @@ func Load() (Config, error) {
 	applyBoolEnv("META_SOCKET_ZMQ_BTC_ENABLED", &cfg.ZMQ.BTC.Enabled)
 	applyStringEnv("META_SOCKET_ZMQ_BTC_ENDPOINT", &cfg.ZMQ.BTC.Endpoint)
 	applyStringEnv("META_SOCKET_ZMQ_BTC_TOPIC", &cfg.ZMQ.BTC.Topic)
+	applyStringEnv("META_SOCKET_ZMQ_BTC_RPC_HOST", &cfg.ZMQ.BTC.RPCHost)
+	applyStringEnv("META_SOCKET_ZMQ_BTC_RPC_USER", &cfg.ZMQ.BTC.RPCUser)
+	applyStringEnv("META_SOCKET_ZMQ_BTC_RPC_PASS", &cfg.ZMQ.BTC.RPCPass)
+	applyBoolEnv("META_SOCKET_ZMQ_BTC_RPC_HTTP_POST_MODE", &cfg.ZMQ.BTC.RPCHTTPPostMode)
+	applyBoolEnv("META_SOCKET_ZMQ_BTC_RPC_DISABLE_TLS", &cfg.ZMQ.BTC.RPCDisableTLS)
 	applyBoolEnv("META_SOCKET_ZMQ_MVC_ENABLED", &cfg.ZMQ.MVC.Enabled)
 	applyStringEnv("META_SOCKET_ZMQ_MVC_ENDPOINT", &cfg.ZMQ.MVC.Endpoint)
 	applyStringEnv("META_SOCKET_ZMQ_MVC_TOPIC", &cfg.ZMQ.MVC.Topic)
+	applyStringEnv("META_SOCKET_ZMQ_MVC_RPC_HOST", &cfg.ZMQ.MVC.RPCHost)
+	applyStringEnv("META_SOCKET_ZMQ_MVC_RPC_USER", &cfg.ZMQ.MVC.RPCUser)
+	applyStringEnv("META_SOCKET_ZMQ_MVC_RPC_PASS", &cfg.ZMQ.MVC.RPCPass)
+	applyBoolEnv("META_SOCKET_ZMQ_MVC_RPC_HTTP_POST_MODE", &cfg.ZMQ.MVC.RPCHTTPPostMode)
+	applyBoolEnv("META_SOCKET_ZMQ_MVC_RPC_DISABLE_TLS", &cfg.ZMQ.MVC.RPCDisableTLS)
 	applyBoolEnv("META_SOCKET_ZMQ_DOGE_ENABLED", &cfg.ZMQ.DOGE.Enabled)
 	applyStringEnv("META_SOCKET_ZMQ_DOGE_ENDPOINT", &cfg.ZMQ.DOGE.Endpoint)
 	applyStringEnv("META_SOCKET_ZMQ_DOGE_TOPIC", &cfg.ZMQ.DOGE.Topic)
+	applyStringEnv("META_SOCKET_ZMQ_DOGE_RPC_HOST", &cfg.ZMQ.DOGE.RPCHost)
+	applyStringEnv("META_SOCKET_ZMQ_DOGE_RPC_USER", &cfg.ZMQ.DOGE.RPCUser)
+	applyStringEnv("META_SOCKET_ZMQ_DOGE_RPC_PASS", &cfg.ZMQ.DOGE.RPCPass)
+	applyBoolEnv("META_SOCKET_ZMQ_DOGE_RPC_HTTP_POST_MODE", &cfg.ZMQ.DOGE.RPCHTTPPostMode)
+	applyBoolEnv("META_SOCKET_ZMQ_DOGE_RPC_DISABLE_TLS", &cfg.ZMQ.DOGE.RPCDisableTLS)
 
 	applyBoolEnv("META_SOCKET_PEBBLE_ENABLED", &cfg.Pebble.Enabled)
 	applyStringEnv("META_SOCKET_PEBBLE_DATA_DIR", &cfg.Pebble.DataDir)

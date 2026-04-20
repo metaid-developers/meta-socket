@@ -3,6 +3,7 @@ package adapter
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -294,6 +295,62 @@ func TestResolveOpReturnOwnerCompatibilityRules(t *testing.T) {
 	mvcOwner, mvcIdx := resolveOpReturnOwner("mvc", tx)
 	if mvcOwner == "" || mvcIdx != 0 {
 		t.Fatalf("expected mvc op_return owner from first standard output, got owner=%s idx=%d", mvcOwner, mvcIdx)
+	}
+}
+
+type stubPrevoutLookup struct {
+	values map[string]int64
+}
+
+func (s *stubPrevoutLookup) ValueByTxOut(txID string, txIdx uint32) (int64, error) {
+	if s == nil {
+		return 0, fmt.Errorf("lookup is nil")
+	}
+	key := fmt.Sprintf("%s:%d", txID, txIdx)
+	value, ok := s.values[key]
+	if !ok {
+		return 0, fmt.Errorf("missing prevout value: %s", key)
+	}
+	return value, nil
+}
+
+func TestResolveInputOwnerUsesPrevoutValueMapping(t *testing.T) {
+	tx := wire.NewMsgTx(1)
+	inputHash1, err := chainhash.NewHashFromStr("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("parse input hash1: %v", err)
+	}
+	inputHash2, err := chainhash.NewHashFromStr("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	if err != nil {
+		t.Fatalf("parse input hash2: %v", err)
+	}
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: *inputHash1, Index: 0}})
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: *inputHash2, Index: 1}})
+	tx.AddTxOut(&wire.TxOut{
+		Value:    400,
+		PkScript: mustP2PKHScriptFromHash(t, bytes.Repeat([]byte{0x51}, 20), chainAddressParams("btc")),
+	})
+	tx.AddTxOut(&wire.TxOut{
+		Value:    500,
+		PkScript: mustP2PKHScriptFromHash(t, bytes.Repeat([]byte{0x52}, 20), chainAddressParams("btc")),
+	})
+	tx.AddTxOut(&wire.TxOut{
+		Value:    600,
+		PkScript: mustP2PKHScriptFromHash(t, bytes.Repeat([]byte{0x53}, 20), chainAddressParams("btc")),
+	})
+
+	lookup := &stubPrevoutLookup{
+		values: map[string]int64{
+			fmt.Sprintf("%s:%d", inputHash1.String(), 0): 700,
+		},
+	}
+
+	owner, outIdx := resolveInputOwner("btc", tx, 1, lookup)
+	if owner == "" {
+		t.Fatalf("expected owner to be resolved by prevout lookup")
+	}
+	if outIdx != 1 {
+		t.Fatalf("expected mapped output index=1, got %d", outIdx)
 	}
 }
 

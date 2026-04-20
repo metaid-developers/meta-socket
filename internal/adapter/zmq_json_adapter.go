@@ -31,13 +31,25 @@ var dogeMainNetParams = chaincfg.Params{
 }
 
 type JSONZMQAdapter struct {
-	chain      string
-	endpoint   string
-	topic      string
-	protocolID []byte
+	chain         string
+	endpoint      string
+	topic         string
+	protocolID    []byte
+	prevoutLookup PrevoutValueLookup
 }
 
-func NewJSONZMQAdapter(chain, endpoint, topic string) *JSONZMQAdapter {
+type JSONZMQAdapterOption func(*JSONZMQAdapter)
+
+func WithPrevoutValueLookup(lookup PrevoutValueLookup) JSONZMQAdapterOption {
+	return func(adapter *JSONZMQAdapter) {
+		if adapter == nil {
+			return
+		}
+		adapter.prevoutLookup = lookup
+	}
+}
+
+func NewJSONZMQAdapter(chain, endpoint, topic string, options ...JSONZMQAdapterOption) *JSONZMQAdapter {
 	normalizedTopic := strings.TrimSpace(topic)
 	if normalizedTopic == "" {
 		normalizedTopic = "rawtx"
@@ -48,12 +60,18 @@ func NewJSONZMQAdapter(chain, endpoint, topic string) *JSONZMQAdapter {
 		protocolID = []byte("metaid")
 	}
 
-	return &JSONZMQAdapter{
+	item := &JSONZMQAdapter{
 		chain:      strings.ToLower(strings.TrimSpace(chain)),
 		endpoint:   strings.TrimSpace(endpoint),
 		topic:      normalizedTopic,
 		protocolID: protocolID,
 	}
+	for _, option := range options {
+		if option != nil {
+			option(item)
+		}
+	}
+	return item
 }
 
 func (a *JSONZMQAdapter) Name() string {
@@ -265,7 +283,7 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 		if parsed := parseOpReturnPin(out.PkScript, a.protocolID); parsed != nil {
 			ownerAddress, ownerOutIdx := resolveOpReturnOwner(a.chain, tx)
 			if ownerAddress == "" {
-				ownerAddress, ownerOutIdx = resolveInputOwner(a.chain, tx, 0)
+				ownerAddress, ownerOutIdx = resolveInputOwner(a.chain, tx, 0, a.prevoutLookup)
 			}
 			appendPin(parsed, ownerOutIdx, ownerAddress)
 			return pins
@@ -289,7 +307,7 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 				parsed = parseDogeRedeemScriptPin(lastPushData(in.SignatureScript), a.protocolID)
 			}
 			if parsed != nil {
-				ownerAddress, ownerOutIdx := resolveInputOwner(a.chain, tx, inIdx)
+				ownerAddress, ownerOutIdx := resolveInputOwner(a.chain, tx, inIdx, a.prevoutLookup)
 				appendPin(parsed, ownerOutIdx, ownerAddress)
 			}
 		}
@@ -298,7 +316,7 @@ func (a *JSONZMQAdapter) extractPinRecordsFromTx(tx *wire.MsgTx) []*PinRecord {
 		for inIdx, in := range tx.TxIn {
 			if script := pickWitnessScript(in); len(script) > 0 {
 				if parsed := parseWitnessPin(script, a.protocolID); parsed != nil {
-					ownerAddress, ownerOutIdx := resolveInputOwner(a.chain, tx, inIdx)
+					ownerAddress, ownerOutIdx := resolveInputOwner(a.chain, tx, inIdx, a.prevoutLookup)
 					appendPin(parsed, ownerOutIdx, ownerAddress)
 				}
 			}
@@ -359,7 +377,7 @@ func resolveOpReturnOwner(chain string, tx *wire.MsgTx) (string, int) {
 	return ownerAddress, ownerIndex
 }
 
-func resolveInputOwner(chain string, tx *wire.MsgTx, inIdx int) (string, int) {
+func resolveInputOwner(chain string, tx *wire.MsgTx, inIdx int, lookup PrevoutValueLookup) (string, int) {
 	if tx == nil || len(tx.TxOut) == 0 {
 		return "", 0
 	}
@@ -370,6 +388,12 @@ func resolveInputOwner(chain string, tx *wire.MsgTx, inIdx int) (string, int) {
 			return address, 0
 		}
 		return "", 0
+	}
+
+	if lookup != nil {
+		if address, outIdx, ok := resolveInputOwnerByPrevoutValues(tx, inIdx, params, lookup); ok {
+			return address, outIdx
+		}
 	}
 
 	// Legacy GetPinOwner depends on prevout values; here we keep deterministic index-aware fallback.
@@ -387,6 +411,45 @@ func resolveInputOwner(chain string, tx *wire.MsgTx, inIdx int) (string, int) {
 		}
 	}
 	return "", 0
+}
+
+func resolveInputOwnerByPrevoutValues(tx *wire.MsgTx, inIdx int, params *chaincfg.Params, lookup PrevoutValueLookup) (string, int, bool) {
+	if tx == nil || lookup == nil || inIdx <= 0 {
+		return "", 0, false
+	}
+
+	totalOutputValue := int64(0)
+	for _, out := range tx.TxOut {
+		totalOutputValue += out.Value
+	}
+
+	inputValue := int64(0)
+	for i, in := range tx.TxIn {
+		if i == inIdx {
+			break
+		}
+		value, err := lookup.ValueByTxOut(in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index)
+		if err != nil {
+			return "", 0, false
+		}
+		inputValue += value
+		if inputValue > totalOutputValue {
+			return "", 0, false
+		}
+	}
+
+	outputValue := int64(0)
+	for i, out := range tx.TxOut {
+		outputValue += out.Value
+		if outputValue > inputValue {
+			address := extractAddress(out.PkScript, params)
+			if address == "" {
+				return "", 0, false
+			}
+			return address, i, true
+		}
+	}
+	return "", 0, false
 }
 
 func extractAddress(pkScript []byte, params *chaincfg.Params) string {
