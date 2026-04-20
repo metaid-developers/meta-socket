@@ -160,9 +160,9 @@
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/tests/contract/socket_compat_test.go`
 - Create: `/Users/tusm/Documents/MetaID_Projects/meta-socket/tests/contract/replay_compare_test.go`
 
-- [ ] **Step 1: 契约测试（连接/握手/心跳/事件/字段）**
-- [ ] **Step 2: 双跑对比（旧服务 vs meta-socket）同输入比对输出**
-- [ ] **Step 3: 针对 `WS_RESPONSE_SUCCESS` 包裹场景单测**
+- [x] **Step 1: 契约测试（连接/握手/心跳/事件/字段）**
+- [x] **Step 2: 双跑对比（旧服务 vs meta-socket）同输入比对输出**
+- [x] **Step 3: 针对 `WS_RESPONSE_SUCCESS` 包裹场景单测**
 
 ### Task 8: IDBots 兼容验收（只改 base_url）
 

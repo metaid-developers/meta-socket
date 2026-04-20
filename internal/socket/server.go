@@ -217,10 +217,7 @@ func (m *Manager) handleClientMessage(client *socketio.Socket, payload interface
 	}
 
 	if socketData.M == HEART_BEAT {
-		_ = m.sendMessage(client, &SocketData{
-			M: HEART_BEAT,
-			C: WS_CODE_HEART_BEAT_BACK,
-		})
+		_ = m.sendMessage(client, BuildHeartbeatReplyEnvelope())
 		return
 	}
 }
@@ -230,10 +227,7 @@ func (m *Manager) handleClientPing(client *socketio.Socket) {
 		return
 	}
 	m.updateDeviceConnectionActivity(string(client.Id()))
-	_ = m.sendMessage(client, &SocketData{
-		M: "pong",
-		C: WS_CODE_SEND_SUCCESS,
-	})
+	_ = m.sendMessage(client, BuildPongReplyEnvelope())
 }
 
 func (m *Manager) getMetaIDAndDeviceTypeFromSocket(client *socketio.Socket) (string, string) {
@@ -242,34 +236,7 @@ func (m *Manager) getMetaIDAndDeviceTypeFromSocket(client *socketio.Socket) (str
 	}
 
 	handshake := client.Handshake()
-	metaid := ""
-	deviceType := DeviceTypePC
-
-	if handshake.Auth != nil {
-		if authMap, ok := handshake.Auth.(map[string]interface{}); ok {
-			if value, ok := authMap["metaid"].(string); ok {
-				metaid = value
-			}
-			if value, ok := authMap["type"].(string); ok && value == DeviceTypeAPP {
-				deviceType = DeviceTypeAPP
-			}
-		}
-	}
-
-	if handshake.Query != nil {
-		if metaid == "" {
-			if values, ok := handshake.Query["metaid"]; ok && len(values) > 0 {
-				metaid = values[0]
-			}
-		}
-		if deviceType == DeviceTypePC {
-			if values, ok := handshake.Query["type"]; ok && len(values) > 0 && values[0] == DeviceTypeAPP {
-				deviceType = DeviceTypeAPP
-			}
-		}
-	}
-
-	return metaid, deviceType
+	return ResolveHandshakeIdentity(handshake.Auth, handshake.Query)
 }
 
 func (m *Manager) getExtraPushAuthKeyFromSocket(client *socketio.Socket) string {
@@ -339,10 +306,7 @@ func (m *Manager) handleExtraPushMessage(client *socketio.Socket, payload interf
 		return
 	}
 	if socketData.M == HEART_BEAT {
-		_ = m.sendMessage(client, &SocketData{
-			M: HEART_BEAT,
-			C: WS_CODE_HEART_BEAT_BACK,
-		})
+		_ = m.sendMessage(client, BuildHeartbeatReplyEnvelope())
 	}
 }
 
@@ -353,10 +317,7 @@ func (m *Manager) handleExtraPushPing(client *socketio.Socket) {
 	if m.extraConnection != nil {
 		m.extraConnection.LastActive = time.Now()
 	}
-	_ = m.sendMessage(client, &SocketData{
-		M: "pong",
-		C: WS_CODE_SEND_SUCCESS,
-	})
+	_ = m.sendMessage(client, BuildPongReplyEnvelope())
 }
 
 func (m *Manager) handleExtraPushDisconnect(client *socketio.Socket, reason string) {

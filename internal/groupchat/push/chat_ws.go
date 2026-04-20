@@ -77,7 +77,7 @@ type GroupUserRoleInfo struct {
 	IsAdmin      bool      `json:"isAdmin"`
 	IsBlocked    bool      `json:"isBlocked"`
 	IsWhitelist  bool      `json:"isWhitelist"`
-	IsRemoved    bool      `json:"isRemoved,omitempty"`
+	IsRemoved    bool      `json:"isRemoved"`
 }
 
 type ReplyInfo struct {
@@ -133,12 +133,57 @@ func wsForGroupRoleInfoChange(roleInfo *db.GroupUserRoleInfo) error {
 	return nil
 }
 
-func wsPostGroupMsg(chat *db.TalkGroupChatV3) {
-	if chat == nil {
-		return
+func BuildGroupChatEnvelope(chat *db.TalkGroupChatV3) *socket.SocketData {
+	item := buildGroupChatItem(chat)
+	if item == nil {
+		return nil
 	}
 
-	item := &GroupChatItem{
+	method := socket.WS_SERVER_NOTIFY_GROUP_CHAT
+	code := socket.WS_CODE_SERVER
+	payload := interface{}(item)
+	if chat.WrapAsSuccess {
+		method = socket.WS_RESPONSE_SUCCESS
+		code = socket.WS_CODE_SEND_SUCCESS
+		payload = map[string]interface{}{"data": item}
+	}
+
+	return &socket.SocketData{
+		M: method,
+		C: code,
+		D: payload,
+	}
+}
+
+func BuildPrivateChatEnvelope(chat *db.TalkPrivateChatV3) *socket.SocketData {
+	item := buildPrivateChatItem(chat)
+	if item == nil {
+		return nil
+	}
+	return &socket.SocketData{
+		M: socket.WS_SERVER_NOTIFY_PRIVATE_CHAT,
+		C: socket.WS_CODE_SERVER,
+		D: item,
+	}
+}
+
+func BuildGroupRoleEnvelope(roleInfo *db.GroupUserRoleInfo) *socket.SocketData {
+	item := buildGroupRoleItem(roleInfo)
+	if item == nil {
+		return nil
+	}
+	return &socket.SocketData{
+		M: socket.WS_SERVER_NOTIFY_GROUP_ROLE,
+		C: socket.WS_CODE_SERVER,
+		D: item,
+	}
+}
+
+func buildGroupChatItem(chat *db.TalkGroupChatV3) *GroupChatItem {
+	if chat == nil {
+		return nil
+	}
+	return &GroupChatItem{
 		GroupID:           chat.GroupID,
 		GlobalMetaID:      chat.GlobalMetaID,
 		ChannelID:         chat.ChannelID,
@@ -164,48 +209,13 @@ func wsPostGroupMsg(chat *db.TalkGroupChatV3) {
 		BlockHeight:       chat.BlockHeight,
 		Index:             chat.Index,
 	}
-
-	method := socket.WS_SERVER_NOTIFY_GROUP_CHAT
-	code := socket.WS_CODE_SERVER
-	payload := interface{}(item)
-	if chat.WrapAsSuccess {
-		method = socket.WS_RESPONSE_SUCCESS
-		code = socket.WS_CODE_SEND_SUCCESS
-		payload = map[string]interface{}{"data": item}
-	}
-
-	sentByRoom := false
-	if RoomBroadcastEnabled() && chat.GroupID != "" && HasKnownMembers(chat.GroupID) {
-		if err := SendGroupMessageToRoom(chat.GroupID, method, code, payload); err == nil {
-			sentByRoom = true
-		}
-	}
-
-	if !sentByRoom {
-		targetMetaIDs := mergeUnique(chat.RecipientMetaIDs, []string{chat.MetaID})
-		targetGlobalMetaIDs := mergeUnique(chat.RecipientGlobalMetaIDs, []string{chat.GlobalMetaID})
-		_ = SendMessageToTargets(targetMetaIDs, targetGlobalMetaIDs, method, code, payload)
-	}
-
-	_ = SendAllMessageToExtraPush(
-		item,
-		chat.RecipientMetaIDs,
-		chat.Mention,
-		chat.RecipientGlobalMetaIDs,
-		nil,
-		socket.WS_SERVER_NOTIFY_GROUP_CHAT,
-	)
 }
 
-func wsPostPrivateMsg(chat *db.TalkPrivateChatV3) {
-	if chat == nil {
-		return
+func buildPrivateChatItem(chat *db.TalkPrivateChatV3) *PrivateChatItem {
+	if chat == nil || chat.From == chat.To {
+		return nil
 	}
-	if chat.From == chat.To {
-		return
-	}
-
-	item := &PrivateChatItem{
+	return &PrivateChatItem{
 		FromGlobalMetaID:  chat.FromGlobalMetaID,
 		From:              chat.From,
 		FromUserInfo:      toUserInfo(chat.FromUserInfo),
@@ -233,18 +243,13 @@ func wsPostPrivateMsg(chat *db.TalkPrivateChatV3) {
 		BlockHeight:       chat.BlockHeight,
 		Index:             chat.Index,
 	}
-
-	targetMetaIDs := mergeUnique(chat.RecipientMetaIDs, []string{chat.From, chat.To})
-	targetGlobalMetaIDs := mergeUnique(chat.RecipientGlobalMetaIDs, []string{chat.FromGlobalMetaID, chat.ToGlobalMetaID})
-	_ = SendMessageToTargets(targetMetaIDs, targetGlobalMetaIDs, socket.WS_SERVER_NOTIFY_PRIVATE_CHAT, socket.WS_CODE_SERVER, item)
-	_ = SendAllMessageToExtraPush(item, targetMetaIDs, nil, targetGlobalMetaIDs, nil, socket.WS_SERVER_NOTIFY_PRIVATE_CHAT)
 }
 
-func wsPostGroupRoleInfo(roleInfo *db.GroupUserRoleInfo) {
+func buildGroupRoleItem(roleInfo *db.GroupUserRoleInfo) *GroupUserRoleInfo {
 	if roleInfo == nil {
-		return
+		return nil
 	}
-	item := &GroupUserRoleInfo{
+	return &GroupUserRoleInfo{
 		GlobalMetaID: roleInfo.GlobalMetaID,
 		MetaID:       roleInfo.MetaID,
 		Address:      roleInfo.Address,
@@ -257,9 +262,66 @@ func wsPostGroupRoleInfo(roleInfo *db.GroupUserRoleInfo) {
 		IsWhitelist:  roleInfo.IsWhitelist,
 		IsRemoved:    roleInfo.IsRemoved,
 	}
+}
+
+func wsPostGroupMsg(chat *db.TalkGroupChatV3) {
+	envelope := BuildGroupChatEnvelope(chat)
+	item := buildGroupChatItem(chat)
+	if envelope == nil || item == nil {
+		return
+	}
+
+	sentByRoom := false
+	if RoomBroadcastEnabled() && chat.GroupID != "" && HasKnownMembers(chat.GroupID) {
+		if err := SendGroupMessageToRoom(chat.GroupID, envelope.M, mustCode(envelope.C), envelope.D); err == nil {
+			sentByRoom = true
+		}
+	}
+
+	if !sentByRoom {
+		targetMetaIDs := mergeUnique(chat.RecipientMetaIDs, []string{chat.MetaID})
+		targetGlobalMetaIDs := mergeUnique(chat.RecipientGlobalMetaIDs, []string{chat.GlobalMetaID})
+		_ = SendMessageToTargets(targetMetaIDs, targetGlobalMetaIDs, envelope.M, mustCode(envelope.C), envelope.D)
+	}
+
+	_ = SendAllMessageToExtraPush(
+		item,
+		chat.RecipientMetaIDs,
+		chat.Mention,
+		chat.RecipientGlobalMetaIDs,
+		nil,
+		socket.WS_SERVER_NOTIFY_GROUP_CHAT,
+	)
+}
+
+func wsPostPrivateMsg(chat *db.TalkPrivateChatV3) {
+	envelope := BuildPrivateChatEnvelope(chat)
+	item := buildPrivateChatItem(chat)
+	if envelope == nil || item == nil {
+		return
+	}
+
+	targetMetaIDs := mergeUnique(chat.RecipientMetaIDs, []string{chat.From, chat.To})
+	targetGlobalMetaIDs := mergeUnique(chat.RecipientGlobalMetaIDs, []string{chat.FromGlobalMetaID, chat.ToGlobalMetaID})
+	_ = SendMessageToTargets(targetMetaIDs, targetGlobalMetaIDs, envelope.M, mustCode(envelope.C), envelope.D)
+	_ = SendAllMessageToExtraPush(item, targetMetaIDs, nil, targetGlobalMetaIDs, nil, socket.WS_SERVER_NOTIFY_PRIVATE_CHAT)
+}
+
+func wsPostGroupRoleInfo(roleInfo *db.GroupUserRoleInfo) {
+	envelope := BuildGroupRoleEnvelope(roleInfo)
+	item := buildGroupRoleItem(roleInfo)
+	if envelope == nil || item == nil {
+		return
+	}
 
 	TrackGroupMembership(roleInfo.MetaID, roleInfo.GlobalMetaID, roleInfo.GroupID, roleInfo.IsRemoved)
-	_ = SendGroupRoleInfoToUser(roleInfo.MetaID, roleInfo.GlobalMetaID, item)
+	_ = SendMessageToTargets(
+		[]string{roleInfo.MetaID},
+		[]string{roleInfo.GlobalMetaID},
+		envelope.M,
+		mustCode(envelope.C),
+		envelope.D,
+	)
 	_ = SendAllMessageToExtraPush(
 		item,
 		[]string{roleInfo.MetaID},
@@ -268,6 +330,13 @@ func wsPostGroupRoleInfo(roleInfo *db.GroupUserRoleInfo) {
 		nil,
 		socket.WS_SERVER_NOTIFY_GROUP_ROLE,
 	)
+}
+
+func mustCode(value interface{}) int {
+	if code, ok := socket.CodeAsInt(value); ok {
+		return code
+	}
+	return socket.WS_CODE_SERVER
 }
 
 func toUserInfo(info *db.UserInfo) *UserInfo {
