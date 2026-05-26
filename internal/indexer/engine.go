@@ -48,6 +48,13 @@ func NewEngine(store *storage.PebbleStore, registry *aggregator.Registry) *Engin
 	}
 }
 
+// Chains returns the number of registered chains.
+func (e *Engine) Chains() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.chains)
+}
+
 // RegisterChain adds a chain+indexer pair to the engine.
 func (e *Engine) RegisterChain(c chain.Chain, idx chain.Indexer, startHeight int64) error {
 	if err := c.Init(); err != nil {
@@ -191,9 +198,11 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 		entry.lastHeight = h
 		e.persistHeight(chainName, h)
 
-		// Notify socket layer
-		for _, evt := range events {
-			e.routeNotifyEvent(evt)
+		// Log notify events — the socket layer reads from each aggregator's
+		// NotifyChannel directly via StartPushConsumer (Phase 2), so the engine
+		// does not write to aggregator channels.
+		if len(events) > 0 {
+			log.Printf("[indexer] %s block %d: %d notify events", chainName, h, len(events))
 		}
 	}
 }
@@ -203,21 +212,6 @@ func (e *Engine) processTransfers(entry *chainEntry, txIDs []string) {
 	// Build idMap from stored pins that reference these outputs
 	// In a full implementation, this queries the aggregator's Pebble DB
 	_ = txIDs
-}
-
-// routeNotifyEvent sends a notification event to the socket layer.
-// Each aggregator has its own notify channel — this routes to all of them.
-func (e *Engine) routeNotifyEvent(evt *aggregator.NotifyEvent) {
-	if evt == nil {
-		return
-	}
-	for _, a := range e.registry.All() {
-		select {
-		case a.NotifyChannel() <- evt:
-		default:
-			// Channel full, drop notification (non-blocking)
-		}
-	}
 }
 
 // persistHeight saves the last processed height to Pebble.

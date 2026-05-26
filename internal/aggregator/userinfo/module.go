@@ -12,6 +12,7 @@ import (
 	"github.com/metaid-developers/meta-socket/internal/api"
 	"github.com/metaid-developers/meta-socket/internal/cache"
 	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/meta-socket/pkg/idaddress"
 )
 
 // UserProfile is the aggregated user info served to idchat.
@@ -94,8 +95,9 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		if profile.Address == "" && address != "" {
 			profile.Address = address
 		}
-		if profile.GlobalMetaID == "" && pin.GlobalMetaId != "" {
-			profile.GlobalMetaID = pin.GlobalMetaId
+		// Generate GlobalMetaId from the user's chain address using idaddress encoding.
+		if profile.GlobalMetaID == "" && address != "" {
+			profile.GlobalMetaID = idaddress.EncodeGlobalMetaId(address, pin.ChainName)
 		}
 		if err := a.saveProfile(profile); err != nil {
 			return nil, err

@@ -46,10 +46,10 @@ func SetupRouter(
 		socketServer.RegisterPresenceRoutes(router)
 	}
 
-	// Aggregator routes
+	// Aggregator routes (mounted under /api/ prefix per idchat API contract).
 	if aggRegistry != nil {
 		for _, a := range aggRegistry.All() {
-			a.RegisterRoutes(router.Group("/"))
+			a.RegisterRoutes(router.Group("/api"))
 		}
 	}
 

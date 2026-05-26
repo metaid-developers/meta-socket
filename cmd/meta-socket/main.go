@@ -10,9 +10,12 @@ import (
 
 	"github.com/metaid-developers/meta-socket/internal/aggregator"
 	"github.com/metaid-developers/meta-socket/internal/aggregator/notify"
+	"github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
 	"github.com/metaid-developers/meta-socket/internal/api"
 	"github.com/metaid-developers/meta-socket/internal/cache"
+	bitcoinchain "github.com/metaid-developers/meta-socket/internal/chain/bitcoin"
 	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/meta-socket/internal/indexer"
 	"github.com/metaid-developers/meta-socket/internal/socket"
 	"github.com/metaid-developers/meta-socket/internal/storage"
 )
@@ -49,7 +52,33 @@ func main() {
 		if err := aggRegistry.Register(&notify.Aggregator{}); err != nil {
 			log.Printf("WARNING: notify aggregator init failed: %v", err)
 		}
+		if err := aggRegistry.Register(&userinfo.Aggregator{}); err != nil {
+			log.Printf("WARNING: userinfo aggregator init failed: %v", err)
+		}
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
+	}
+
+	// --- Indexer engine ---
+	var idxEngine *indexer.Engine
+	if store != nil && aggRegistry != nil && cfg.BlockIndex.Enabled {
+		idxEngine = indexer.NewEngine(store, aggRegistry)
+
+		// BTC chain + indexer
+		if cfg.BlockIndex.BTC.Enabled {
+			btcChain := bitcoinchain.NewChain(cfg.BlockIndex.BTC)
+			btcParams := bitcoinchain.NetParams("") // "" = mainnet, "1" = testnet, "2" = regtest
+			btcIndexer := bitcoinchain.NewIndexer(btcChain, btcParams)
+
+			if err := idxEngine.RegisterChain(btcChain, btcIndexer, cfg.BlockIndex.BTC.InitialHeight); err != nil {
+				log.Printf("WARNING: BTC chain registration failed: %v", err)
+			}
+		}
+
+		// Start the engine if any chains are registered.
+		// The engine runs in background goroutines managed by the parent context.
+		if idxEngine.Chains() > 0 {
+			idxEngine.Start(context.Background())
+		}
 	}
 
 	// --- Socket.IO server ---
@@ -96,6 +125,11 @@ func main() {
 	// Shutdown socket server first (disconnects all clients cleanly).
 	if socketServer != nil {
 		socketServer.Shutdown()
+	}
+
+	// Stop the indexer engine.
+	if idxEngine != nil {
+		idxEngine.Stop()
 	}
 
 	if err := srv.Shutdown(ctx); err != nil {

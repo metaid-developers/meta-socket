@@ -156,11 +156,11 @@ func (idx *Indexer) ZmqTopics() []string {
 // getOwnerAddress finds the new owner of a spent output.
 func (idx *Indexer) getOwnerAddress(outputPoint string, tx *wire.MsgTx) map[string]any {
 	// Find the output that receives the value back
-	for idx, out := range tx.TxOut {
+	for outIdx, out := range tx.TxOut {
 		_, addresses, _, _ := txscript.ExtractPkScriptAddrs(out.PkScript, idx.chainParams)
 		if len(addresses) > 0 {
 			return map[string]any{
-				"location": fmt.Sprintf("%s:%d", tx.TxHash().String(), idx),
+				"location": fmt.Sprintf("%s:%d", tx.TxHash().String(), outIdx),
 				"address":  addresses[0].String(),
 			}
 		}
@@ -231,12 +231,13 @@ func parseMetaIDWitness(tx *wire.MsgTx, outIdx int, height int64, timestamp int6
 		Output:             fmt.Sprintf("%s:%d", txHash, outIdx),
 	}
 
-	// Parse additional fields if present
-	if len(witness) > dataStart+3 {
-		pin.ContentType = string(witness[dataStart+3])
+	// Parse additional fields if present.
+	// Field layout after marker: [operation, path, encryption, version, content_type, body...]
+	if len(witness) > dataStart+5 {
+		pin.ContentType = string(witness[dataStart+5])
 	}
-	if len(witness) > dataStart+4 {
-		pin.ContentBody = witness[dataStart+4]
+	if len(witness) > dataStart+6 {
+		pin.ContentBody = witness[dataStart+6]
 	}
 
 	return pin, nil
