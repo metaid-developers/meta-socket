@@ -137,8 +137,8 @@ func TestHandleMetaIdInfo_ReturnsCorrectFormat(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if resp.Code != 0 {
-		t.Errorf("expected code=0, got %d", resp.Code)
+	if resp.Code != 1 {
+		t.Errorf("expected code=1 (meta-file-system success), got %d", resp.Code)
 	}
 	if resp.ProcessingTime <= 0 {
 		t.Errorf("expected processingTime > 0, got %d", resp.ProcessingTime)
@@ -150,6 +150,8 @@ func TestHandleMetaIdInfo_ReturnsCorrectFormat(t *testing.T) {
 }
 
 // TestHandleMetaIdInfo_NotFound tests error response for unknown user.
+// The /info/* endpoints use code=40400 not_found to stay wire-compatible with
+// meta-file-system (idchat's metafileIndexerApi client rejects any non-1 code).
 func TestHandleMetaIdInfo_NotFound(t *testing.T) {
 	_, store, router := setupTestAggregator(t)
 	defer store.Close()
@@ -162,8 +164,8 @@ func TestHandleMetaIdInfo_NotFound(t *testing.T) {
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	if resp.Code == 0 {
-		t.Error("expected non-zero code for not found")
+	if resp.Code != 40400 {
+		t.Errorf("expected code=40400 (meta-file-system not_found), got %d", resp.Code)
 	}
 	t.Logf("not found response: code=%d message=%s", resp.Code, resp.Message)
 }
@@ -231,7 +233,7 @@ func TestHandleMetaIdInfo_CacheHit(t *testing.T) {
 		ProcessingTime int64       `json:"processingTime"`
 	}
 	json.Unmarshal(w1.Body.Bytes(), &resp1)
-	if resp1.Code != 0 {
+	if resp1.Code != 1 {
 		t.Fatalf("first call failed: code=%d", resp1.Code)
 	}
 	pt1 := resp1.ProcessingTime
@@ -244,7 +246,7 @@ func TestHandleMetaIdInfo_CacheHit(t *testing.T) {
 		ProcessingTime int64       `json:"processingTime"`
 	}
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
-	if resp2.Code != 0 {
+	if resp2.Code != 1 {
 		t.Fatalf("second call failed: code=%d", resp2.Code)
 	}
 	pt2 := resp2.ProcessingTime
@@ -359,8 +361,8 @@ func TestHandleAddressInfo(t *testing.T) {
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	if resp.Code != 0 {
-		t.Errorf("expected code=0, got %d", resp.Code)
+	if resp.Code != 1 {
+		t.Errorf("expected code=1 (meta-file-system success), got %d", resp.Code)
 	}
 	if resp.ProcessingTime <= 0 {
 		t.Errorf("expected processingTime > 0, got %d", resp.ProcessingTime)
@@ -401,6 +403,183 @@ func TestNameMethod(t *testing.T) {
 	agg := &Aggregator{}
 	if agg.Name() != "userinfo" {
 		t.Errorf("expected Name()='userinfo', got %q", agg.Name())
+	}
+}
+
+// --- Acceptance Criteria #11: idchat / meta-file-system wire compatibility ---
+
+// TestUserProfile_JSONFieldNames locks in the exact JSON field names idchat's
+// metafileIndexerApi client expects. In particular, chat public key fields must
+// be all-lowercase (chatpubkey / chatpubkeyId) to match meta-file-system, not
+// camelCase. Any regression here breaks idchat's normalizeUserInfo() silently.
+func TestUserProfile_JSONFieldNames(t *testing.T) {
+	profile := UserProfile{
+		GlobalMetaID:    "idq1test",
+		MetaID:          "metaid_test",
+		Address:         "addr_test",
+		Name:            "Alice",
+		NameId:          "tx_name:i0",
+		Avatar:          "/content/tx_avatar:i0",
+		AvatarId:        "tx_avatar:i0",
+		ChatPublicKey:   "02deadbeef",
+		ChatPublicKeyId: "tx_key:i0",
+		ChainName:       "btc",
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var asMap map[string]interface{}
+	if err := json.Unmarshal(raw, &asMap); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	// Required fields (must exist with the lowercase names).
+	requiredFields := []string{"chatpubkey", "chatpubkeyId", "metaid", "globalMetaId", "avatar", "avatarId"}
+	for _, f := range requiredFields {
+		if _, ok := asMap[f]; !ok {
+			t.Errorf("expected JSON field %q to be present, raw=%s", f, raw)
+		}
+	}
+
+	// Forbidden fields (camelCase variants that meta-file-system does NOT use
+	// and that idchat's normalizeUserInfo() reads as undefined).
+	forbiddenFields := []string{"chatPublicKey", "chatPublicKeyId"}
+	for _, f := range forbiddenFields {
+		if _, ok := asMap[f]; ok {
+			t.Errorf("JSON field %q must not be present (raw=%s)", f, raw)
+		}
+	}
+
+	// Spot-check the values landed on the correct keys.
+	if asMap["chatpubkey"] != "02deadbeef" {
+		t.Errorf("chatpubkey value mismatch: %v", asMap["chatpubkey"])
+	}
+	if asMap["chatpubkeyId"] != "tx_key:i0" {
+		t.Errorf("chatpubkeyId value mismatch: %v", asMap["chatpubkeyId"])
+	}
+}
+
+// TestHandleMetaIdInfo_MetafileIndexerPrefix verifies the userinfo handlers
+// respond on both `/api/info/...` (native meta-socket prefix) and
+// `/metafile-indexer/api/info/...` (meta-file-system drop-in prefix) so idchat
+// can flip `metafileIndexerApi` to meta-socket with zero TypeScript changes.
+func TestHandleMetaIdInfo_MetafileIndexerPrefix(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	// Register the same routes under the meta-file-system prefix.
+	router := gin.New()
+	agg.RegisterRoutes(router.Group("/api"))
+	agg.RegisterRoutes(router.Group("/metafile-indexer/api"))
+
+	initPin := &aggregator.PinInscription{
+		Path:      "/",
+		Operation: "init",
+		MetaId:    "drop_in_user",
+		Address:   "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+		ChainName: "btc",
+		Id:        "drop_in_init:i0",
+	}
+	agg.HandleBlockPin(initPin)
+
+	paths := []string{
+		"/api/info/metaid/drop_in_user",
+		"/metafile-indexer/api/info/metaid/drop_in_user",
+	}
+	for _, p := range paths {
+		w := performRequest(t, router, "GET", p)
+		var resp struct {
+			Code int         `json:"code"`
+			Data UserProfile `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: decode failed: %v body=%s", p, err, w.Body.String())
+		}
+		if resp.Code != 1 {
+			t.Errorf("%s: expected code=1, got %d body=%s", p, resp.Code, w.Body.String())
+		}
+		if resp.Data.MetaID != "drop_in_user" {
+			t.Errorf("%s: metaid mismatch: %q", p, resp.Data.MetaID)
+		}
+	}
+}
+
+// TestHandleMetaIdInfo_FullWireFormat asserts the whole on-the-wire response
+// exactly matches what idchat's metafileIndexerApi client expects after a
+// realistic init + name + chatpubkey indexing sequence.
+func TestHandleMetaIdInfo_FullWireFormat(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	pins := []*aggregator.PinInscription{
+		{
+			Path:      "/",
+			Operation: "init",
+			MetaId:    "wire_user",
+			Address:   "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+			ChainName: "btc",
+			Id:        "wire_init:i0",
+		},
+		{
+			Path:        "/info/name",
+			Operation:   "create",
+			MetaId:      "wire_user",
+			Address:     "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+			ChainName:   "btc",
+			ContentBody: []byte("WireAlice"),
+			Id:          "wire_name:i0",
+		},
+		{
+			Path:        "/info/chatpubkey",
+			Operation:   "create",
+			MetaId:      "wire_user",
+			Address:     "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+			ChainName:   "btc",
+			ContentBody: []byte("02wireBeef"),
+			Id:          "wire_key:i0",
+		},
+	}
+	for _, pin := range pins {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(%s) failed: %v", pin.Path, err)
+		}
+	}
+
+	w := performRequest(t, router, "GET", "/api/info/metaid/wire_user")
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v body=%s", err, w.Body.String())
+	}
+
+	// Envelope shape (code=1 success, processingTime present).
+	if code, _ := resp["code"].(float64); int(code) != 1 {
+		t.Errorf("expected code=1, got %v", resp["code"])
+	}
+	if _, ok := resp["processingTime"]; !ok {
+		t.Errorf("expected processingTime field")
+	}
+
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data is not an object: %v", resp["data"])
+	}
+	if data["metaid"] != "wire_user" {
+		t.Errorf("metaid mismatch: %v", data["metaid"])
+	}
+	if data["name"] != "WireAlice" {
+		t.Errorf("name mismatch: %v", data["name"])
+	}
+	if data["chatpubkey"] != "02wireBeef" {
+		t.Errorf("chatpubkey mismatch: %v (full data=%v)", data["chatpubkey"], data)
+	}
+	if data["chatpubkeyId"] != "wire_key:i0" {
+		t.Errorf("chatpubkeyId mismatch: %v", data["chatpubkeyId"])
+	}
+	// Make sure the legacy camelCase keys are NOT present.
+	if _, present := data["chatPublicKey"]; present {
+		t.Error("legacy chatPublicKey key must not be in response (idchat reads chatpubkey)")
 	}
 }
 

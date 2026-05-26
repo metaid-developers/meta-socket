@@ -16,7 +16,7 @@ master agent 在以下条件**全部满足**时判定开发完成：
    c. 私聊消息 → 对方收到 `WS_SERVER_NOTIFY_PRIVATE_CHAT`
    d. 查询群聊历史 → HTTP API 返回正确消息列表
    e. 查询私聊历史 → HTTP API 返回正确消息列表
-   f. 查询用户信息 → `/api/info/*` 返回 name/avatar/chatPubKey
+   f. 查询用户信息 → `/api/info/*`（或 `/metafile-indexer/api/info/*`）返回 name/avatar/chatpubkey（字段名与 meta-file-system 对齐）
    g. 角色变更（管理员/拉黑/移出）→ 收到 `WS_SERVER_NOTIFY_GROUP_ROLE`
    h. 屏蔽聊天 → `/push-base/v1/push/add_blocked_chat`（POST，带签名）成功，`get_user_blocked_chats` 返回该记录
    i. 解除屏蔽 → `/push-base/v1/push/remove_blocked_chat` 成功，列表更新
@@ -128,7 +128,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 - [ ] **BTC 区块解析**：用已知 BTC 测试网区块高度（如高度 100），`CatchPins(100)` 返回非空 Pin 列表。Pin 的 `Path`、`Operation`、`ContentBody`、`ChainName` 字段不为空。`ChainName == "btc"`。
 - [ ] **BTC mempool**：ZMQ 连接 BTC 节点。向测试网广播一笔含 MetaID 数据的交易，30 秒内索引引擎通过 `HandleMempoolPin` 处理该 Pin（超时可适当放宽，但 master agent 应确保不是永久阻塞）。
 - [ ] **UserInfo 入库**：索引一个包含 `/` (init) 和 `/info/name` 的区块后，通过 PebbleStore 验证：`Get("userinfo", []byte("profile:<metaid>"))` 返回包含 `"name"` 字段的非空 JSON。
-- [ ] **UserInfo HTTP**：`GET /api/info/metaid/<metaid>` 返回 `{"code":0,"data":{"name":"...","avatar":"...","chatPublicKey":"..."}}`，字段名与 IDCHAT_API_CONTRACT.md 一致。
+- [ ] **UserInfo HTTP**：`GET /api/info/metaid/<metaid>` 返回 `{"code":1,"data":{"name":"...","avatar":"...","chatpubkey":"..."}}`，字段名与 meta-file-system 对齐（小写 `chatpubkey` / `chatpubkeyId`）。同样路由也挂在 `/metafile-indexer/api/info/metaid/...` 下作为 idchat `metafileIndexerApi` 客户端的 drop-in 替换，`code: 1` 成功 / `40400` not_found / `40000` invalid_param 三种返回与 meta-file-system 一致。
 - [ ] **高度恢复**：重启进程后，`Get("indexer_meta", []byte("btc_lastheight"))` 返回之前的高度。引擎从该高度+1 开始扫描，不重复索引已有区块。
 - [ ] **GlobalMetaId**：`/api/info/address/<addr>` 返回的 `globalMetaId` 字段以 `id-` 前缀开头。
 - [ ] **缓存命中**：同一 metaid 调两次 `/api/info/metaid/<id>`，第二次耗时 < 第一次的 1/10（Pebble 磁盘 IO vs 内存 LRU 的差距足够显著）。

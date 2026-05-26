@@ -16,6 +16,11 @@ import (
 )
 
 // UserProfile is the aggregated user info served to idchat.
+//
+// JSON tags mirror meta-file-system's MetaIDUserInfo shape so idchat's
+// existing `metafileIndexerApi` client (which expects `chatpubkey` /
+// `chatpubkeyId` in all-lowercase) can consume meta-socket as a drop-in
+// replacement without any TypeScript changes.
 type UserProfile struct {
 	GlobalMetaID    string `json:"globalMetaId"`
 	MetaID          string `json:"metaid"`
@@ -28,8 +33,8 @@ type UserProfile struct {
 	Bio             string `json:"bio,omitempty"`
 	BioId           string `json:"bioId,omitempty"`
 	Background      string `json:"background,omitempty"`
-	ChatPublicKey   string `json:"chatPublicKey,omitempty"`
-	ChatPublicKeyId string `json:"chatPublicKeyId,omitempty"`
+	ChatPublicKey   string `json:"chatpubkey,omitempty"`
+	ChatPublicKeyId string `json:"chatpubkeyId,omitempty"`
 	ChainName       string `json:"chainName,omitempty"`
 }
 
@@ -154,10 +159,13 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/info/globalmetaid/:globalMetaId", a.handleGlobalMetaIdInfo)
 }
 
+// The /info/* endpoints use code=1 for success and code=40400/40000 for errors
+// to mirror meta-file-system's response shape. See internal/api/response.go for
+// background.
 func (a *Aggregator) handleAddressInfo(c *gin.Context) {
 	address := c.Param("address")
 	if address == "" {
-		api.RespErr(c, 1, "address is required")
+		api.RespErr(c, api.MetaFileInvalidParamCode, "address is required")
 		return
 	}
 
@@ -165,17 +173,17 @@ func (a *Aggregator) handleAddressInfo(c *gin.Context) {
 	// TODO: add address→metaid reverse index for efficiency
 	profile, err := a.findProfileByAddress(address)
 	if err != nil || profile == nil {
-		api.RespErr(c, 1, "user not found")
+		api.RespErr(c, api.MetaFileNotFoundCode, "user not found")
 		return
 	}
 
-	api.RespSuccess(c, profile)
+	api.RespSuccessCode(c, api.MetaFileSuccessCode, profile)
 }
 
 func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
 	metaid := c.Param("metaid")
 	if metaid == "" {
-		api.RespErr(c, 1, "metaid is required")
+		api.RespErr(c, api.MetaFileInvalidParamCode, "metaid is required")
 		return
 	}
 
@@ -184,14 +192,14 @@ func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
 	if val, ok := a.cache.Get(cacheKey); ok {
 		var profile UserProfile
 		if err := json.Unmarshal(val, &profile); err == nil {
-			api.RespSuccess(c, &profile)
+			api.RespSuccessCode(c, api.MetaFileSuccessCode, &profile)
 			return
 		}
 	}
 
 	profile, err := a.getProfile(metaid)
 	if err != nil || profile == nil {
-		api.RespErr(c, 1, "user not found")
+		api.RespErr(c, api.MetaFileNotFoundCode, "user not found")
 		return
 	}
 
@@ -200,24 +208,24 @@ func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
 		a.cache.Set(cacheKey, raw, defaultTTL)
 	}
 
-	api.RespSuccess(c, profile)
+	api.RespSuccessCode(c, api.MetaFileSuccessCode, profile)
 }
 
 func (a *Aggregator) handleGlobalMetaIdInfo(c *gin.Context) {
 	globalMetaId := c.Param("globalMetaId")
 	if globalMetaId == "" {
-		api.RespErr(c, 1, "globalMetaId is required")
+		api.RespErr(c, api.MetaFileInvalidParamCode, "globalMetaId is required")
 		return
 	}
 
 	// Try to resolve globalMetaId → metaid
 	profile, err := a.findProfileByGlobalMetaId(globalMetaId)
 	if err != nil || profile == nil {
-		api.RespErr(c, 1, "user not found")
+		api.RespErr(c, api.MetaFileNotFoundCode, "user not found")
 		return
 	}
 
-	api.RespSuccess(c, profile)
+	api.RespSuccessCode(c, api.MetaFileSuccessCode, profile)
 }
 
 // --- Profile persistence ---

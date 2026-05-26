@@ -44,6 +44,17 @@ Affected calls:
 - `GET /api/info/metaid/:metaid`
 - `GET /api/info/globalmetaid/:globalMetaId`
 
+### meta-file-system replacement (`metafileIndexerApi`)
+
+idchat reads user info today from meta-file-system through the `metafileIndexerApi` client at `${metaFSBaseURL}/metafile-indexer/api/info/*`. meta-socket exposes the same three routes under `/metafile-indexer/api/info/*` with byte-for-byte matching response (`code: 1` on success, `40400` not_found, `40000` invalid_param, fields `chatpubkey` / `chatpubkeyId` in lowercase), so the migration is a single config line:
+
+```diff
+- api.metafileIndexerApi = 'https://file.metaid.io/metafile-indexer/api'
++ api.metafileIndexerApi = 'http://meta-socket-host:8080/metafile-indexer/api'
+```
+
+The other meta-file-system endpoints (`fileApi`, `avatarContentApi`) keep pointing at meta-file-system — meta-socket does not yet provide file upload or `/content/<pinId>` static serving.
+
 ### Group Chat Endpoints
 
 | Setting | Old Value | New Value |

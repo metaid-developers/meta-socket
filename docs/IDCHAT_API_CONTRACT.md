@@ -37,11 +37,25 @@ Query: `?timestamp=0`. Response `data` contains `nextTimestamp` (int64 unix seco
 
 | Method | Path | Response `.data` shape |
 |--------|------|----------------------|
-| GET | `/api/info/address/:address` | `{metaid, globalMetaId, name, address, avatar, avatarId, nftAvatar, bio, background, chatpubkey, chatpubkeyId, chainName}` |
+| GET | `/api/info/address/:address` | `{metaid, globalMetaId, name, nameId, address, avatar, avatarId, nftAvatar, bio, bioId, background, chatpubkey, chatpubkeyId, chainName}` |
 | GET | `/api/info/metaid/:metaid` | Same |
 | GET | `/api/info/globalmetaid/:globalMetaId` | Same |
 
-All fields are strings. `avatar`, `nftAvatar`, `background` values are content paths like `/content/<pinId>`.
+All fields are strings. `avatar`, `nftAvatar`, `background` values are content paths like `/content/<pinId>`. Chat public key fields are intentionally all-lowercase (`chatpubkey` / `chatpubkeyId`) to match meta-file-system.
+
+### meta-file-system drop-in compatibility
+
+These three `/info/*` endpoints are an exception to the universal `code: 0 = success` envelope used by every other meta-socket endpoint. idchat's `metafileIndexerApi` client treats `code === 1` as success and any other value as failure (`idchat/src/api/man.ts`). To let idchat point its `metafileIndexerApi` URL at meta-socket without any TypeScript changes, the user-info handlers mirror meta-file-system's response shape exactly:
+
+| Result | code | body |
+|---|---|---|
+| Success | `1` | `{code: 1, data: <UserProfile>, message: "", processingTime: <unix_ms>}` |
+| Not found | `40400` | `{code: 40400, message: "user not found"}` |
+| Invalid parameter | `40000` | `{code: 40000, message: "<param> is required"}` |
+
+The same three handlers are also mounted under `/metafile-indexer/api/info/*` so idchat can point its existing `metafileIndexerApi` URL (`<host>/metafile-indexer/api`) directly at meta-socket. The native `/api/info/*` paths are kept for new clients that follow meta-socket's standard prefix.
+
+All **other** meta-socket endpoints (`/group-chat/*`, `/push-base/*`, `/healthz`, `/socket/online/*`) continue to use `code: 0 = success`, matching idchat's `TalkApi` / `chat-notify` / `pushBase` clients.
 
 ## 2. Group Chat (`/group-chat/*`)
 

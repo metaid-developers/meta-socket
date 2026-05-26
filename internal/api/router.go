@@ -51,6 +51,20 @@ func SetupRouter(
 		for _, a := range aggRegistry.All() {
 			a.RegisterRoutes(router.Group("/api"))
 		}
+
+		// Also expose the userinfo aggregator under /metafile-indexer/api so
+		// idchat's `metafileIndexerApi` client (configured as
+		// `<metaFSBaseURL>/metafile-indexer/api`) can target meta-socket as a
+		// drop-in replacement for the meta-file-system user info subset
+		// without any frontend code changes. Only `/info/*` routes are
+		// duplicated here; file upload / avatar content stay with
+		// meta-file-system.
+		metafileGroup := router.Group("/metafile-indexer/api")
+		for _, a := range aggRegistry.All() {
+			if a.Name() == "userinfo" {
+				a.RegisterRoutes(metafileGroup)
+			}
+		}
 	}
 
 	return router
