@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"os/signal"
@@ -10,11 +9,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/meta-socket/internal/aggregator/notify"
+	"github.com/metaid-developers/meta-socket/internal/api"
+	"github.com/metaid-developers/meta-socket/internal/cache"
 	"github.com/metaid-developers/meta-socket/internal/config"
-	groupchatdb "github.com/metaid-developers/meta-socket/internal/groupchat/db"
-	groupchatservice "github.com/metaid-developers/meta-socket/internal/groupchat/service"
-	"github.com/metaid-developers/meta-socket/internal/pipeline"
-	metasocket "github.com/metaid-developers/meta-socket/internal/socket"
+	"github.com/metaid-developers/meta-socket/internal/storage"
 )
 
 var version = "dev"
@@ -25,68 +25,54 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
+	// --- Pebble store ---
+	var store *storage.PebbleStore
+	if cfg.Pebble.Enabled {
+		store = storage.NewPebbleStore(cfg.Pebble.DataDir)
+		log.Printf("pebble store: dataDir=%s", cfg.Pebble.DataDir)
+	} else {
+		log.Printf("pebble store disabled")
+	}
+
+	// --- Cache provider ---
+	var cacheProvider *cache.CacheProvider
+	if store != nil {
+		cacheProvider = cache.New(store)
+		log.Printf("cache: maxEntries=%d ttl=%ds", cfg.Cache.MaxEntries, cfg.Cache.DefaultTTLSeconds)
+	}
+
+	// --- Aggregator registry ---
+	var aggRegistry *aggregator.Registry
+	if store != nil && cacheProvider != nil {
+		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
+
+		if err := aggRegistry.Register(&notify.Aggregator{}); err != nil {
+			log.Printf("WARNING: notify aggregator init failed: %v", err)
+		}
+		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
+	}
+
+	// --- HTTP router ---
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 
-	var zmqRunner *pipeline.ZMQRunner
-	var stopPipeline context.CancelFunc
-
-	if cfg.Socket.Enabled {
-		socketManager, err := metasocket.NewManager(cfg.Socket)
-		if err != nil {
-			log.Fatalf("failed to initialize socket manager: %v", err)
-		}
-		metasocket.SetGlobalManager(socketManager)
-		if err := metasocket.MountRoutes(router, socketManager, cfg.Socket); err != nil {
-			log.Fatalf("failed to mount socket routes: %v", err)
-		}
-		if err := metasocket.MountOnlineRoutes(router, socketManager); err != nil {
-			log.Fatalf("failed to mount socket online routes: %v", err)
-		}
-		log.Printf("socket service enabled on paths: %s, %s", cfg.Socket.PrimaryPath, cfg.Socket.LegacyPath)
-	} else {
-		log.Printf("socket service disabled by config")
-	}
-
-	groupInitReport, err := groupchatservice.Init(cfg)
-	if err != nil {
-		log.Fatalf("failed to initialize groupchat service: %v", err)
-	}
-	log.Printf("groupchat init finished: excluded=%v", groupInitReport.ExcludedModules)
-
-	if cfg.ZMQ.Enabled {
-		groupProcessor := groupchatdb.NewProcessor()
-		handlers := pipeline.RouterHandlers{
-			OnGroup:     groupProcessor.ProcessGroupPin,
-			OnPrivate:   groupProcessor.ProcessPrivatePin,
-			OnGroupRole: groupProcessor.ProcessGroupRolePin,
-		}
-		pinRouter := pipeline.NewPinRouter(nil, handlers)
-		zmqRunner = pipeline.NewZMQRunner(pinRouter)
-
-		enabledAdapters := pipeline.BuildEnabledAdapters(cfg.ZMQ)
-		for _, item := range enabledAdapters {
-			zmqRunner.RegisterAdapter(item)
-		}
-
-		runCtx, cancel := context.WithCancel(context.Background())
-		stopPipeline = cancel
-		if err := zmqRunner.Start(runCtx); err != nil {
-			log.Fatalf("failed to start zmq runner: %v", err)
-		}
-		log.Printf("zmq pipeline enabled: adapters=%d", len(enabledAdapters))
-	} else {
-		log.Printf("zmq pipeline disabled by config")
-	}
-
+	// Health check (no auth, minimal)
 	router.GET(cfg.Service.HealthPath, func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
+		api.RespSuccess(c, gin.H{
 			"status":  "ok",
 			"service": "meta-socket",
 			"version": version,
 		})
 	})
 
+	// Aggregator routes
+	if aggRegistry != nil {
+		for _, a := range aggRegistry.All() {
+			a.RegisterRoutes(router.Group("/"))
+		}
+	}
+
+	// --- Start HTTP server ---
 	srv := &http.Server{
 		Addr:              cfg.Service.HTTPAddr,
 		Handler:           router,
@@ -96,35 +82,22 @@ func main() {
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	serverErrCh := make(chan error, 1)
 	go func() {
-		log.Printf("meta-socket bootstrap service started: %s", cfg.Summary())
+		log.Printf("meta-socket started: %s", cfg.Summary())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			serverErrCh <- err
+			log.Fatalf("server error: %v", err)
 		}
-		close(serverErrCh)
 	}()
 
-	select {
-	case err := <-serverErrCh:
-		if err != nil {
-			log.Fatalf("server exited unexpectedly: %v", err)
-		}
-	case <-shutdownCtx.Done():
-	}
-
-	if stopPipeline != nil {
-		stopPipeline()
-	}
-	if zmqRunner != nil {
-		zmqRunner.Wait()
-	}
+	<-shutdownCtx.Done()
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Service.ShutdownTimeout)
 	defer cancel()
-
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("graceful shutdown failed: %v", err)
+		log.Printf("shutdown error: %v", err)
 	}
-	log.Printf("meta-socket stopped cleanly")
+	if store != nil {
+		store.Close()
+	}
+	log.Printf("meta-socket stopped")
 }

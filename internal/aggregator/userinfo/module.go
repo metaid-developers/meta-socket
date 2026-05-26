@@ -1,0 +1,286 @@
+package userinfo
+
+import (
+	"encoding/json"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/meta-socket/internal/api"
+	"github.com/metaid-developers/meta-socket/internal/cache"
+	"github.com/metaid-developers/meta-socket/internal/storage"
+)
+
+// UserProfile is the aggregated user info served to idchat.
+type UserProfile struct {
+	GlobalMetaID    string `json:"globalMetaId"`
+	MetaID          string `json:"metaid"`
+	Address         string `json:"address"`
+	Name            string `json:"name,omitempty"`
+	NameId          string `json:"nameId,omitempty"`
+	Avatar          string `json:"avatar,omitempty"`
+	AvatarId        string `json:"avatarId,omitempty"`
+	NftAvatar       string `json:"nftAvatar,omitempty"`
+	Bio             string `json:"bio,omitempty"`
+	BioId           string `json:"bioId,omitempty"`
+	Background      string `json:"background,omitempty"`
+	ChatPublicKey   string `json:"chatPublicKey,omitempty"`
+	ChatPublicKeyId string `json:"chatPublicKeyId,omitempty"`
+	ChainName       string `json:"chainName,omitempty"`
+}
+
+// Aggregator indexes /info/* pins and serves user profile queries.
+type Aggregator struct {
+	store    *storage.PebbleStore
+	cache    *cache.Cache[[]byte]
+	notifyCh chan *aggregator.NotifyEvent
+}
+
+const (
+	namespace      = "userinfo"
+	profilePrefix  = "profile:"
+	metaidPrefix   = "metaid:" // metaid → address mapping
+	defaultTTL     = 10 * time.Minute
+	cacheMaxEntries = 5000
+)
+
+func (a *Aggregator) Name() string { return "userinfo" }
+
+func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.CacheProvider) error {
+	a.store = store
+	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, defaultTTL)
+	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
+	return nil
+}
+
+func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
+	return a.notifyCh
+}
+
+// HandleBlockPin processes /info/* and / (init) paths.
+func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	if pin == nil {
+		return nil, nil
+	}
+
+	path := pin.Path
+	metaid := pin.MetaId
+	if metaid == "" {
+		metaid = pin.CreateMetaId
+	}
+	if metaid == "" {
+		return nil, nil
+	}
+
+	address := pin.Address
+	if address == "" {
+		address = pin.CreateAddress
+	}
+
+	// Load or create profile
+	profile, err := a.getProfile(metaid)
+	if err != nil || profile == nil {
+		profile = &UserProfile{
+			MetaID:    metaid,
+			ChainName: pin.ChainName,
+		}
+	}
+
+	// / (init) — first-time registration
+	if path == "/" {
+		if profile.Address == "" && address != "" {
+			profile.Address = address
+		}
+		if profile.GlobalMetaID == "" && pin.GlobalMetaId != "" {
+			profile.GlobalMetaID = pin.GlobalMetaId
+		}
+		if err := a.saveProfile(profile); err != nil {
+			return nil, err
+		}
+		// Store metaid→address mapping
+		if err := a.store.Set(namespace, metaidKey(metaid), []byte(address)); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	// /info/* paths
+	switch {
+	case path == "/info/name":
+		profile.Name = string(pin.ContentBody)
+		profile.NameId = pin.Id
+	case path == "/info/avatar":
+		profile.Avatar = "/content/" + pin.Id
+		profile.AvatarId = pin.Id
+		a.cache.InvalidateByPrefix("avatar:" + metaid)
+	case path == "/info/nft-avatar":
+		profile.NftAvatar = "/content/" + pin.Id
+	case path == "/info/bio":
+		profile.Bio = string(pin.ContentBody)
+		profile.BioId = pin.Id
+	case path == "/info/background":
+		profile.Background = "/content/" + pin.Id
+	case path == "/info/chatpubkey":
+		profile.ChatPublicKey = string(pin.ContentBody)
+		profile.ChatPublicKeyId = pin.Id
+	default:
+		return nil, nil
+	}
+
+	if err := a.saveProfile(profile); err != nil {
+		return nil, err
+	}
+
+	// Invalidate cache for this user
+	a.cache.InvalidateByPrefix("profile:" + metaid)
+
+	return nil, nil
+}
+
+func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	// Don't index mempool user info — wait for confirmation
+	return nil, nil
+}
+
+// RegisterRoutes mounts user info HTTP endpoints.
+func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
+	router.GET("/info/address/:address", a.handleAddressInfo)
+	router.GET("/info/metaid/:metaid", a.handleMetaIdInfo)
+	router.GET("/info/globalmetaid/:globalMetaId", a.handleGlobalMetaIdInfo)
+}
+
+func (a *Aggregator) handleAddressInfo(c *gin.Context) {
+	address := c.Param("address")
+	if address == "" {
+		api.RespErr(c, 1, "address is required")
+		return
+	}
+
+	// Look up profile by address iterating all profiles
+	// TODO: add address→metaid reverse index for efficiency
+	profile, err := a.findProfileByAddress(address)
+	if err != nil || profile == nil {
+		api.RespErr(c, 1, "user not found")
+		return
+	}
+
+	api.RespSuccess(c, profile)
+}
+
+func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
+	metaid := c.Param("metaid")
+	if metaid == "" {
+		api.RespErr(c, 1, "metaid is required")
+		return
+	}
+
+	// Check cache first
+	cacheKey := "profile:" + metaid
+	if val, ok := a.cache.Get(cacheKey); ok {
+		var profile UserProfile
+		if err := json.Unmarshal(val, &profile); err == nil {
+			api.RespSuccess(c, &profile)
+			return
+		}
+	}
+
+	profile, err := a.getProfile(metaid)
+	if err != nil || profile == nil {
+		api.RespErr(c, 1, "user not found")
+		return
+	}
+
+	// Cache the result
+	if raw, err := json.Marshal(profile); err == nil {
+		a.cache.Set(cacheKey, raw, defaultTTL)
+	}
+
+	api.RespSuccess(c, profile)
+}
+
+func (a *Aggregator) handleGlobalMetaIdInfo(c *gin.Context) {
+	globalMetaId := c.Param("globalMetaId")
+	if globalMetaId == "" {
+		api.RespErr(c, 1, "globalMetaId is required")
+		return
+	}
+
+	// Try to resolve globalMetaId → metaid
+	profile, err := a.findProfileByGlobalMetaId(globalMetaId)
+	if err != nil || profile == nil {
+		api.RespErr(c, 1, "user not found")
+		return
+	}
+
+	api.RespSuccess(c, profile)
+}
+
+// --- Profile persistence ---
+
+func (a *Aggregator) getProfile(metaid string) (*UserProfile, error) {
+	raw, err := a.store.Get(namespace, profileKey(metaid))
+	if err != nil || raw == nil {
+		return nil, nil
+	}
+
+	var profile UserProfile
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		log.Printf("[userinfo] failed to unmarshal profile for %s: %v", metaid, err)
+		return nil, err
+	}
+	return &profile, nil
+}
+
+func (a *Aggregator) saveProfile(profile *UserProfile) error {
+	if profile.MetaID == "" {
+		return nil
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		return err
+	}
+	return a.store.Set(namespace, profileKey(profile.MetaID), raw)
+}
+
+func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) {
+	var found *UserProfile
+	err := a.store.ScanPrefix(namespace, profileKey(""), func(key, value []byte) error {
+		var p UserProfile
+		if err := json.Unmarshal(value, &p); err != nil {
+			return nil // skip corrupt entries
+		}
+		if strings.EqualFold(p.Address, address) {
+			found = &p
+			return nil
+		}
+		return nil
+	})
+	return found, err
+}
+
+func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
+	var found *UserProfile
+	err := a.store.ScanPrefix(namespace, profileKey(""), func(key, value []byte) error {
+		var p UserProfile
+		if err := json.Unmarshal(value, &p); err != nil {
+			return nil
+		}
+		if strings.EqualFold(p.GlobalMetaID, globalMetaId) {
+			found = &p
+			return nil
+		}
+		return nil
+	})
+	return found, err
+}
+
+func profileKey(metaid string) []byte {
+	return []byte(profilePrefix + metaid)
+}
+
+func metaidKey(metaid string) []byte {
+	return []byte(metaidPrefix + metaid)
+}

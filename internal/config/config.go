@@ -10,12 +10,37 @@ import (
 )
 
 type Config struct {
-	Service   ServiceConfig   `json:"service"`
-	Socket    SocketConfig    `json:"socket"`
-	ZMQ       ZMQConfig       `json:"zmq"`
-	Pebble    PebbleConfig    `json:"pebble"`
-	Profile   ProfileConfig   `json:"profile"`
-	GroupChat GroupChatConfig `json:"groupChat"`
+	Service    ServiceConfig    `json:"service"`
+	Socket     SocketConfig     `json:"socket"`
+	ZMQ        ZMQConfig        `json:"zmq"`
+	BlockIndex BlockIndexConfig `json:"blockIndex"`
+	Pebble     PebbleConfig     `json:"pebble"`
+	Cache      CacheConfig      `json:"cache"`
+	Profile    ProfileConfig    `json:"profile"`
+	GroupChat  GroupChatConfig  `json:"groupChat"`
+}
+
+type BlockIndexConfig struct {
+	Enabled bool   `json:"enabled"`
+	BTC     ChainRPCConfig `json:"btc"`
+	MVC     ChainRPCConfig `json:"mvc"`
+	DOGE    ChainRPCConfig `json:"doge"`
+	OPCAT   ChainRPCConfig `json:"opcat"`
+}
+
+type ChainRPCConfig struct {
+	Enabled         bool   `json:"enabled"`
+	RPCHost         string `json:"rpcHost"`
+	RPCUser         string `json:"rpcUser"`
+	RPCPass         string `json:"rpcPass"`
+	RPCHTTPPostMode bool   `json:"rpcHttpPostMode"`
+	RPCDisableTLS   bool   `json:"rpcDisableTls"`
+	InitialHeight   int64  `json:"initialHeight"`
+}
+
+type CacheConfig struct {
+	MaxEntries int `json:"maxEntries"`
+	DefaultTTLSeconds int `json:"defaultTtlSeconds"`
 }
 
 type ServiceConfig struct {
@@ -43,6 +68,7 @@ type ZMQConfig struct {
 	BTC     ChainZMQConfig `json:"btc"`
 	MVC     ChainZMQConfig `json:"mvc"`
 	DOGE    ChainZMQConfig `json:"doge"`
+	OPCAT   ChainZMQConfig `json:"opcat"`
 }
 
 type ChainZMQConfig struct {
@@ -130,6 +156,27 @@ func Default() Config {
 				RPCHTTPPostMode: true,
 				RPCDisableTLS:   true,
 			},
+			OPCAT: ChainZMQConfig{
+				Enabled:         false,
+				Endpoint:        "",
+				Topic:           "rawtx",
+				RPCHost:         "",
+				RPCUser:         "",
+				RPCPass:         "",
+				RPCHTTPPostMode: true,
+				RPCDisableTLS:   true,
+			},
+		},
+		BlockIndex: BlockIndexConfig{
+			Enabled: false,
+			BTC:   ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+			MVC:   ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+			DOGE:  ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+			OPCAT: ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+		},
+		Cache: CacheConfig{
+			MaxEntries:        10000,
+			DefaultTTLSeconds: 300,
 		},
 		Pebble: PebbleConfig{
 			Enabled: true,
