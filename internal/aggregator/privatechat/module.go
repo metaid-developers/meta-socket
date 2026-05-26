@@ -2,14 +2,14 @@ package privatechat
 
 import (
 	"github.com/gin-gonic/gin"
+
 	"github.com/metaid-developers/meta-socket/internal/aggregator"
 	"github.com/metaid-developers/meta-socket/internal/cache"
 	"github.com/metaid-developers/meta-socket/internal/storage"
 )
 
-// Aggregator wraps private chat processing with the Aggregator interface.
-// In v1, it delegates to the existing callback-based processor for Pin handling
-// and adds Pebble persistence + HTTP query APIs.
+// Aggregator implements the aggregator.Aggregator interface for private chat.
+// It provides PebbleDB persistence, HTTP query APIs, and Socket.IO push integration.
 type Aggregator struct {
 	store    *storage.PebbleStore
 	cache    *cache.Cache[[]byte]
@@ -19,7 +19,7 @@ type Aggregator struct {
 const (
 	namespace       = "privatechat"
 	cacheMaxEntries = 2000
-	cacheTTL        = 5 * 60 // 5 min
+	cacheTTL        = 5 * 60 // 5 min default (seconds)
 )
 
 func (a *Aggregator) Name() string { return "privatechat" }
@@ -35,14 +35,33 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 	return a.notifyCh
 }
 
+// HandleBlockPin processes a confirmed (on-chain) pin.
+// Dispatches to the appropriate handler and returns a NotifyEvent for socket push.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
-	return nil, nil
+	event, err := a.dispatchPin(pin)
+	if err != nil {
+		return nil, err
+	}
+	if event != nil {
+		a.sendNotifyEvent(event)
+	}
+	return event, err
 }
 
+// HandleMempoolPin processes a mempool (unconfirmed) pin.
+// Dispatches to the appropriate handler for real-time push.
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
-	return nil, nil
+	event, err := a.dispatchPin(pin)
+	if err != nil {
+		return nil, err
+	}
+	if event != nil {
+		a.sendNotifyEvent(event)
+	}
+	return event, err
 }
 
+// RegisterRoutes mounts all private-chat HTTP endpoints on the router.
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
-	// Placeholder: private chat query routes will be added here
+	registerRoutes(a, router)
 }

@@ -1,0 +1,307 @@
+package privatechat
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+
+	"github.com/cockroachdb/pebble"
+)
+
+// PrivateMessage represents a private chat message, matching IDCHAT_API_CONTRACT.md field names.
+type PrivateMessage struct {
+	FromGlobalMetaId string      `json:"fromGlobalMetaId"`
+	From             string      `json:"from"`
+	FromAddress      string      `json:"fromAddress"`
+	FromUserInfo     interface{} `json:"fromUserInfo,omitempty"`
+	ToGlobalMetaId   string      `json:"toGlobalMetaId"`
+	To               string      `json:"to"`
+	ToAddress        string      `json:"toAddress"`
+	ToUserInfo       interface{} `json:"toUserInfo,omitempty"`
+	TxId             string      `json:"txId"`
+	PinId            string      `json:"pinId"`
+	Protocol         string      `json:"protocol"`
+	Content          string      `json:"content"`
+	ContentType      string      `json:"contentType"`
+	Encryption       string      `json:"encryption"`
+	Timestamp        int64       `json:"timestamp"`
+	Chain            string      `json:"chain"`
+	BlockHeight      int64       `json:"blockHeight"`
+	Index            int64       `json:"index"`
+}
+
+// PrivateChatListResult is the response format for private chat list queries.
+type PrivateChatListResult struct {
+	Total         int64             `json:"total"`
+	NextCursor    string            `json:"nextCursor"`
+	NextTimestamp int64             `json:"nextTimestamp"`
+	List          []*PrivateMessage `json:"list"`
+}
+
+// PrivateChatHome represents a conversation partner with the last message preview.
+type PrivateChatHome struct {
+	MetaId       string          `json:"metaId"`
+	GlobalMetaId string          `json:"globalMetaId,omitempty"`
+	UserInfo     interface{}     `json:"userInfo,omitempty"`
+	LastMessage  *PrivateMessage `json:"lastMessage,omitempty"`
+}
+
+const (
+	pchatKeyConst = "pchat:"
+)
+
+// sortMetas returns the lower and higher metaId alphabetically.
+// This ensures bidirectional keys (A→B and B→A) land in the same prefix.
+func sortMetas(a, b string) (lo, hi string) {
+	if a < b {
+		return a, b
+	}
+	return b, a
+}
+
+// pchatKey builds a key for a private chat message.
+// Format: pchat:<lower_metaid>:<higher_metaid>:<timestamp>:<txId>
+// Timestamp is zero-padded to 19 digits for correct key ordering.
+func pchatKey(metaId1, metaId2 string, timestamp int64, txId string) []byte {
+	lo, hi := sortMetas(metaId1, metaId2)
+	return []byte(fmt.Sprintf("%s%s:%s:%019d:%s", pchatKeyConst, lo, hi, timestamp, txId))
+}
+
+// pchatPrefix builds a prefix for scanning all messages between two users.
+// Format: pchat:<lower_metaid>:<higher_metaid>:
+func pchatPrefix(metaId1, metaId2 string) []byte {
+	lo, hi := sortMetas(metaId1, metaId2)
+	return []byte(fmt.Sprintf("%s%s:%s:", pchatKeyConst, lo, hi))
+}
+
+// SavePrivateMessage persists a private chat message to PebbleDB.
+func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return a.store.Set(namespace, pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId), raw)
+}
+
+// GetPrivateChatList returns bidirectionally filtered messages between two users
+// with cursor-based pagination (descending by timestamp, newest first).
+// The cursor is a base64-encoded offset.
+func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr string, size int64) (*PrivateChatListResult, error) {
+	prefix := pchatPrefix(myMetaId, otherMetaId)
+
+	// Collect all messages in ascending order (oldest first by key)
+	var allMessages []*PrivateMessage
+	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
+		var msg PrivateMessage
+		if e := json.Unmarshal(value, &msg); e != nil {
+			return nil
+		}
+		allMessages = append(allMessages, &msg)
+		return nil
+	})
+
+	total := int64(len(allMessages))
+
+	// cursor encodes how many entries we've already returned (offset from the newest)
+	var startFromEnd int64
+	if cursorStr != "" && cursorStr != "null" {
+		decoded, cursorErr := base64.StdEncoding.DecodeString(cursorStr)
+		if cursorErr == nil && len(decoded) >= 8 {
+			startFromEnd = int64FromBytes(decoded[:8])
+		}
+	}
+
+	// Messages are in ascending order (oldest first by key).
+	// We want descending (newest first), so start from the end.
+	startIdx := total - 1 - startFromEnd
+	if startIdx >= total {
+		startIdx = total - 1
+	}
+	if startIdx < 0 {
+		startIdx = -1
+	}
+
+	var messages []*PrivateMessage
+	for i := startIdx; i >= 0 && int64(len(messages)) < size; i-- {
+		messages = append(messages, allMessages[i])
+	}
+
+	// Calculate next cursor
+	nextCursor := ""
+	newOffset := startFromEnd + int64(len(messages))
+	if newOffset < total && int64(len(messages)) == size && len(messages) > 0 {
+		nextCursor = base64.StdEncoding.EncodeToString(int64ToBytes(newOffset))
+	}
+
+	nextTimestamp := int64(0)
+	if len(messages) > 0 {
+		nextTimestamp = messages[len(messages)-1].Timestamp
+	}
+
+	return &PrivateChatListResult{
+		Total:         total,
+		NextCursor:    nextCursor,
+		NextTimestamp: nextTimestamp,
+		List:          messages,
+	}, nil
+}
+
+// GetPrivateChatListByIndex returns messages by startIndex (descending by timestamp, newest first).
+func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, startIndex int64, size int64) (*PrivateChatListResult, error) {
+	prefix := pchatPrefix(myMetaId, otherMetaId)
+
+	var allMessages []*PrivateMessage
+	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
+		var msg PrivateMessage
+		if e := json.Unmarshal(value, &msg); e != nil {
+			return nil
+		}
+		allMessages = append(allMessages, &msg)
+		return nil
+	})
+
+	total := int64(len(allMessages))
+
+	// Reverse for descending order (newest first)
+	reversed := make([]*PrivateMessage, len(allMessages))
+	for i, msg := range allMessages {
+		reversed[len(allMessages)-1-i] = msg
+	}
+
+	var messages []*PrivateMessage
+	for i := startIndex; i < total && int64(len(messages)) < size; i++ {
+		messages = append(messages, reversed[i])
+	}
+
+	nextTimestamp := int64(0)
+	if len(messages) > 0 {
+		nextTimestamp = messages[len(messages)-1].Timestamp
+	}
+
+	return &PrivateChatListResult{
+		Total:         total,
+		NextTimestamp: nextTimestamp,
+		List:          messages,
+	}, nil
+}
+
+// GetPrivateChatHomes returns a list of conversation partners with last message preview.
+// Scans all pchat keys to find unique conversation partners of the given metaId.
+func (a *Aggregator) GetPrivateChatHomes(metaid string) ([]*PrivateChatHome, error) {
+	// Scan the global pchat prefix to find all conversations involving this user.
+	partnerMap := make(map[string]*PrivateMessage)
+
+	prefix := []byte(pchatKeyConst)
+	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
+		var msg PrivateMessage
+		if e := json.Unmarshal(value, &msg); e != nil {
+			return nil
+		}
+
+		// Determine the partner
+		var partnerMetaId string
+		if msg.From == metaid {
+			partnerMetaId = msg.To
+		} else if msg.To == metaid {
+			partnerMetaId = msg.From
+		} else {
+			return nil
+		}
+
+		// Keep the latest message for this partner
+		if existing, ok := partnerMap[partnerMetaId]; !ok || msg.Timestamp > existing.Timestamp {
+			partnerMap[partnerMetaId] = &msg
+		}
+		return nil
+	})
+
+	var homes []*PrivateChatHome
+	for partnerMetaId, lastMsg := range partnerMap {
+		home := &PrivateChatHome{
+			MetaId:      partnerMetaId,
+			LastMessage: lastMsg,
+		}
+		// Copy globalMetaId from the message for the partner
+		if lastMsg.From == partnerMetaId {
+			home.GlobalMetaId = lastMsg.FromGlobalMetaId
+		} else {
+			home.GlobalMetaId = lastMsg.ToGlobalMetaId
+		}
+		homes = append(homes, home)
+	}
+
+	if homes == nil {
+		homes = []*PrivateChatHome{}
+	}
+
+	return homes, nil
+}
+
+// GetPrivateGroupPaths returns the list of paths where the given metaId has private chat messages.
+func (a *Aggregator) GetPrivateGroupPaths(metaid string) ([]string, error) {
+	pathSet := make(map[string]bool)
+
+	prefix := []byte(pchatKeyConst)
+	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
+		var msg PrivateMessage
+		if e := json.Unmarshal(value, &msg); e != nil {
+			return nil
+		}
+
+		if msg.From == metaid || msg.To == metaid {
+			lo, hi := sortMetas(msg.From, msg.To)
+			pathSet[lo+":"+hi] = true
+		}
+		return nil
+	})
+
+	var paths []string
+	for p := range pathSet {
+		paths = append(paths, p)
+	}
+
+	if paths == nil {
+		paths = []string{}
+	}
+
+	return paths, nil
+}
+
+// GetPrivateMessage retrieves a single private message by its Pebble key.
+func (a *Aggregator) GetPrivateMessage(metaId1, metaId2 string, timestamp int64, txId string) (*PrivateMessage, error) {
+	raw, err := a.store.Get(namespace, pchatKey(metaId1, metaId2, timestamp, txId))
+	if err != nil {
+		if err == pebble.ErrNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if raw == nil {
+		return nil, nil
+	}
+
+	var msg PrivateMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
+// int64FromBytes converts up to 8 bytes to int64.
+func int64FromBytes(b []byte) int64 {
+	var v int64
+	for i := 0; i < len(b) && i < 8; i++ {
+		v = (v << 8) | int64(b[i])
+	}
+	return v
+}
+
+// int64ToBytes converts int64 to 8 bytes.
+func int64ToBytes(v int64) []byte {
+	b := make([]byte, 8)
+	for i := 7; i >= 0; i-- {
+		b[i] = byte(v & 0xff)
+		v >>= 8
+	}
+	return b
+}
