@@ -1,19 +1,19 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
 	"github.com/metaid-developers/meta-socket/internal/aggregator"
 	"github.com/metaid-developers/meta-socket/internal/aggregator/notify"
 	"github.com/metaid-developers/meta-socket/internal/api"
 	"github.com/metaid-developers/meta-socket/internal/cache"
 	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/meta-socket/internal/socket"
 	"github.com/metaid-developers/meta-socket/internal/storage"
 )
 
@@ -52,25 +52,21 @@ func main() {
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
 
-	// --- HTTP router ---
-	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	// --- Socket.IO server ---
+	var socketServer *socket.Server
+	if cfg.Socket.Enabled {
+		socketServer = socket.NewServer(cfg.Socket)
+		socketServer.StartTimeoutCleanup()
+		log.Printf("socket.io server: path=%s legacy=%s", cfg.Socket.PrimaryPath, cfg.Socket.LegacyPath)
 
-	// Health check (no auth, minimal)
-	router.GET(cfg.Service.HealthPath, func(c *gin.Context) {
-		api.RespSuccess(c, gin.H{
-			"status":  "ok",
-			"service": "meta-socket",
-			"version": version,
-		})
-	})
-
-	// Aggregator routes
-	if aggRegistry != nil {
-		for _, a := range aggRegistry.All() {
-			a.RegisterRoutes(router.Group("/"))
+		// Start push consumer to route aggregator notify events to connected clients.
+		if aggRegistry != nil {
+			socketServer.StartPushConsumer(aggRegistry)
 		}
 	}
+
+	// --- HTTP router ---
+	router := api.SetupRouter(cfg, store, cacheProvider, aggRegistry, socketServer, version)
 
 	// --- Start HTTP server ---
 	srv := &http.Server{
@@ -91,8 +87,17 @@ func main() {
 
 	<-shutdownCtx.Done()
 
+	// --- Graceful shutdown ---
+	log.Printf("shutting down...")
+
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Service.ShutdownTimeout)
 	defer cancel()
+
+	// Shutdown socket server first (disconnects all clients cleanly).
+	if socketServer != nil {
+		socketServer.Shutdown()
+	}
+
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown error: %v", err)
 	}

@@ -34,12 +34,12 @@ func New(store *storage.PebbleStore) *CacheProvider {
 
 // Namespace returns a typed Cache for the given namespace.
 // The first call for a namespace creates it; subsequent calls return the same instance.
-func (cp *CacheProvider) Namespace(name string, maxEntries int, ttl time.Duration) *Cache[string] {
+func (cp *CacheProvider) Namespace(name string, maxEntries int, ttl time.Duration) *Cache[[]byte] {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 
 	if ns, ok := cp.namespaces[name]; ok {
-		return &Cache[string]{ns: ns, name: name, provider: cp}
+		return &Cache[[]byte]{ns: ns, name: name, provider: cp}
 	}
 
 	ns := &namespaceCache{
@@ -47,7 +47,7 @@ func (cp *CacheProvider) Namespace(name string, maxEntries int, ttl time.Duratio
 		l2Prefix: "cache_" + name,
 	}
 	cp.namespaces[name] = ns
-	return &Cache[string]{ns: ns, name: name, provider: cp}
+	return &Cache[[]byte]{ns: ns, name: name, provider: cp}
 }
 
 // Cache is a typed two-level cache for a specific namespace.

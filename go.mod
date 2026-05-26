@@ -3,8 +3,11 @@ module github.com/metaid-developers/meta-socket
 go 1.26
 
 require (
+	github.com/btcsuite/btcd v0.25.0
+	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/gin-gonic/gin v1.10.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/pebbe/zmq4 v1.4.0
 	github.com/zishang520/engine.io/v2 v2.5.0
@@ -13,19 +16,17 @@ require (
 
 require (
 	github.com/DataDog/zstd v1.4.5 // indirect
-	github.com/HdrHistogram/hdrhistogram-go v1.1.2 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
-	github.com/btcsuite/btcd v0.25.0 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.3.5 // indirect
 	github.com/btcsuite/btcd/btcutil v1.1.5 // indirect
-	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0 // indirect
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f // indirect
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd // indirect
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cockroachdb/errors v1.11.3 // indirect
 	github.com/cockroachdb/fifo v0.0.0-20240606204812-0bbfbd93a7ce // indirect
@@ -44,8 +45,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/gookit/color v1.5.4 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/json-iterator/go v1.12.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
@@ -56,9 +56,13 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/prometheus/client_golang v1.19.1 // indirect
+	github.com/prometheus/client_model v0.5.0 // indirect
+	github.com/prometheus/common v0.48.0 // indirect
+	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/quic-go/quic-go v0.53.0 // indirect
-	github.com/rogpeppe/go-internal v1.9.0 // indirect
+	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
@@ -80,3 +84,5 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/json-iterator/go v1.12.0 => github.com/json-iterator/go v1.1.12
