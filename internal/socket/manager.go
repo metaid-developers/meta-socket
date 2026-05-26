@@ -43,10 +43,13 @@ func NewConnectionManager(maxPC, maxApp int) *ConnectionManager {
 }
 
 // Add registers a new connection. If adding would exceed the per-user device limit
-// for the connection type, the oldest connection of that type is disconnected.
+// for the connection type, the oldest connection of that type is evicted: removed
+// from the manager map and disconnected. The actual Socket.Disconnect call is made
+// after releasing the manager lock, because the underlying socket.io library invokes
+// the "disconnect" handler synchronously, which would otherwise re-enter Remove and
+// deadlock on m.mu.
 func (m *ConnectionManager) Add(metaId string, connType ConnType, sock *sio.Socket) *TrackedConnection {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	tc := &TrackedConnection{
 		MetaId:      metaId,
@@ -58,7 +61,6 @@ func (m *ConnectionManager) Add(metaId string, connType ConnType, sock *sio.Sock
 
 	conns := m.connections[metaId]
 
-	// Enforce per-type limit
 	limit := m.maxPC
 	if connType == ConnTypeApp {
 		limit = m.maxApp
@@ -71,23 +73,31 @@ func (m *ConnectionManager) Add(metaId string, connType ConnType, sock *sio.Sock
 		}
 	}
 
+	var toDisconnect *TrackedConnection
 	if len(sameType) >= limit {
-		// Disconnect oldest connection of this type
 		oldest := sameType[0]
 		for _, c := range sameType {
 			if c.ConnectedAt.Before(oldest.ConnectedAt) {
 				oldest = c
 			}
 		}
-		log.Printf("[socket] device limit reached: metaid=%s type=%s, disconnecting oldest %s",
-			metaId, connType, oldest.Socket.Id())
-		oldest.Socket.Disconnect(true)
+		// Remove from the map while still holding the lock so subsequent
+		// state observers (stats / list / FindBySocket) cannot see the evicted
+		// connection. The Disconnect side-effect runs after Unlock.
 		m.removeLocked(metaId, oldest)
+		toDisconnect = oldest
 	}
 
 	m.connections[metaId] = append(m.connections[metaId], tc)
 	log.Printf("[socket] connection added: metaid=%s type=%s socket=%s total=%d",
 		metaId, connType, sock.Id(), len(m.connections[metaId]))
+	m.mu.Unlock()
+
+	if toDisconnect != nil {
+		log.Printf("[socket] device limit reached: metaid=%s type=%s, disconnecting oldest %s",
+			metaId, connType, toDisconnect.Socket.Id())
+		toDisconnect.Socket.Disconnect(true)
+	}
 	return tc
 }
 
