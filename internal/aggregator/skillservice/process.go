@@ -133,6 +133,17 @@ func (a *Aggregator) processServiceModify(pin *aggregator.PinInscription) error 
 	updated := newServiceRecord(pin, summary, sourcePinId)
 	// Preserve the original CreatedAt; modifies only move UpdatedAt forward.
 	updated.CreatedAt = previous.CreatedAt
+	// Modify PINs often omit provider identity metadata; keep the create
+	// record's provider keys so list/detail can still resolve profiles.
+	if updated.ProviderMetaId == "" {
+		updated.ProviderMetaId = previous.ProviderMetaId
+	}
+	if updated.ProviderGlobalMetaId == "" {
+		updated.ProviderGlobalMetaId = previous.ProviderGlobalMetaId
+	}
+	if updated.ProviderAddress == "" {
+		updated.ProviderAddress = previous.ProviderAddress
+	}
 	// Modify of an already-revoked service: keep operation=revoke (revoke
 	// is terminal in v1). The chain-declared status can still update.
 	if previous.Operation == OperationRevoke {

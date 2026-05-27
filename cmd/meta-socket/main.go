@@ -17,6 +17,7 @@ import (
 	"github.com/metaid-developers/meta-socket/internal/api"
 	"github.com/metaid-developers/meta-socket/internal/cache"
 	bitcoinchain "github.com/metaid-developers/meta-socket/internal/chain/bitcoin"
+	mvcchain "github.com/metaid-developers/meta-socket/internal/chain/mvc"
 	"github.com/metaid-developers/meta-socket/internal/config"
 	"github.com/metaid-developers/meta-socket/internal/indexer"
 	"github.com/metaid-developers/meta-socket/internal/socket"
@@ -95,6 +96,17 @@ func main() {
 
 			if err := idxEngine.RegisterChain(btcChain, btcIndexer, cfg.BlockIndex.BTC.InitialHeight); err != nil {
 				log.Printf("WARNING: BTC chain registration failed: %v", err)
+			}
+		}
+
+		// MVC chain + indexer (skill-service on MVC per Bot Hub spec).
+		if cfg.BlockIndex.MVC.Enabled {
+			mvcChain := mvcchain.NewChain(cfg.BlockIndex.MVC)
+			mvcParams := mvcchain.NetParams("")
+			mvcIndexer := mvcchain.NewIndexer(mvcChain, mvcParams)
+
+			if err := idxEngine.RegisterChain(mvcChain, mvcIndexer, cfg.BlockIndex.MVC.InitialHeight); err != nil {
+				log.Printf("WARNING: MVC chain registration failed: %v", err)
 			}
 		}
 

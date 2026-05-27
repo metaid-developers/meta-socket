@@ -1,6 +1,7 @@
 package skillservice
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -23,8 +24,7 @@ func registerRoutes(a *Aggregator, router *gin.RouterGroup) {
 	// List endpoint (M5).
 	bh.GET("/list", a.handleList)
 
-	// Detail endpoint stub. Real implementation lands in M6.
-	bh.GET("/detail/:serviceId", a.handleDetailStub)
+	bh.GET("/detail/:serviceId", a.handleDetail)
 }
 
 // handleList parses the spec's query parameters into ListParams, runs the
@@ -103,9 +103,34 @@ type listErr string
 
 func (e listErr) Error() string { return string(e) }
 
-// handleDetailStub returns 40400 not_found so clients hitting the endpoint
-// before M6 ships get a clean failure rather than a misleading empty
-// service body. It is replaced wholesale in M6.
-func (a *Aggregator) handleDetailStub(c *gin.Context) {
-	api.RespErr(c, 40400, "service not found")
+// handleDetail serves GET /api/bot-hub/skill-service/detail/:serviceId.
+func (a *Aggregator) handleDetail(c *gin.Context) {
+	serviceID := strings.TrimSpace(c.Param("serviceId"))
+	if serviceID == "" {
+		api.RespErr(c, 40000, "serviceId required")
+		return
+	}
+
+	result, err := a.Detail(DetailParams{
+		ServiceID: serviceID,
+		ChainName: c.Query("chainName"),
+		IDType:    c.Query("idType"),
+	})
+	if err != nil {
+		if errors.Is(err, errInvalidIDType) {
+			api.RespErr(c, 40000, detailErr(err))
+			return
+		}
+		if errors.Is(err, errAmbiguousLookup) {
+			api.RespErr(c, 40000, "ambiguous serviceId")
+			return
+		}
+		api.RespErr(c, 50000, detailErr(err))
+		return
+	}
+	if result == nil {
+		api.RespErr(c, 40400, "service not found")
+		return
+	}
+	api.RespSuccess(c, result)
 }
