@@ -41,12 +41,16 @@ func makeServicePin(t *testing.T, opts servicePinOpts) *aggregator.PinInscriptio
 	if opts.Path == "" {
 		opts.Path = PathSkillService
 	}
+	providerSkill := opts.ProviderSkill
+	if providerSkill == "" {
+		providerSkill = "zhuwei-fortune"
+	}
 	summary := ServiceContentSummary{
 		ServiceName:    opts.ServiceName,
 		DisplayName:    opts.DisplayName,
 		Description:    opts.Description,
 		ServiceIcon:    opts.ServiceIcon,
-		ProviderSkill:  "zhuwei-fortune",
+		ProviderSkill:  providerSkill,
 		Price:          opts.Price,
 		Currency:       opts.Currency,
 		PaymentChain:   opts.ChainName,
@@ -93,6 +97,7 @@ type servicePinOpts struct {
 	DisplayName    string
 	Description    string
 	ServiceIcon    string
+	ProviderSkill  string // empty defaults to "zhuwei-fortune" so existing tests keep their behaviour
 	Price          string
 	Currency       string
 	PaymentAddress string
