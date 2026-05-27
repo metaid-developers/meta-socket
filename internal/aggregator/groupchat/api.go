@@ -50,11 +50,10 @@ func registerRoutes(a *Aggregator, router *gin.RouterGroup) {
 	// Search
 	gc.GET("/search-users", a.handleSearchUsers)
 
-	// Private chat stubs (implemented by privatechat aggregator, but routes are here per contract)
-	gc.GET("/private-chat-list", a.handleStub)
-	gc.GET("/private-chat-list-by-index", a.handleStub)
-	gc.GET("/private-group-paths", a.handleStub)
-	gc.GET("/chat/homes/:metaId", a.handleStub)
+	// Private chat routes are owned by the privatechat aggregator (see
+	// internal/aggregator/privatechat/api.go). Both aggregators share the
+	// /group-chat/ prefix because idchat does not distinguish between group
+	// and private chats at the URL level.
 }
 
 // --- Community Handlers ---
