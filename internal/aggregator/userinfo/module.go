@@ -1,6 +1,7 @@
 package userinfo
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"strings"
@@ -40,16 +41,19 @@ type UserProfile struct {
 
 // Aggregator indexes /info/* pins and serves user profile queries.
 type Aggregator struct {
-	store    *storage.PebbleStore
-	cache    *cache.Cache[[]byte]
-	notifyCh chan *aggregator.NotifyEvent
+	store               *storage.PebbleStore
+	cache               *cache.Cache[[]byte]
+	notifyCh            chan *aggregator.NotifyEvent
+	remoteLookup        remoteProfileLookup
+	profileMode         string
+	allowRemoteFallback bool
 }
 
 const (
-	namespace      = "userinfo"
-	profilePrefix  = "profile:"
-	metaidPrefix   = "metaid:" // metaid → address mapping
-	defaultTTL     = 10 * time.Minute
+	namespace       = "userinfo"
+	profilePrefix   = "profile:"
+	metaidPrefix    = "metaid:" // metaid → address mapping
+	defaultTTL      = 10 * time.Minute
 	cacheMaxEntries = 5000
 )
 
@@ -59,6 +63,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, defaultTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
+	a.configureRemoteProfileLookupFromEnv()
 	return nil
 }
 
@@ -169,9 +174,7 @@ func (a *Aggregator) handleAddressInfo(c *gin.Context) {
 		return
 	}
 
-	// Look up profile by address iterating all profiles
-	// TODO: add address→metaid reverse index for efficiency
-	profile, err := a.findProfileByAddress(address)
+	profile, err := a.lookupByAddress(c.Request.Context(), address)
 	if err != nil || profile == nil {
 		api.RespErr(c, api.MetaFileNotFoundCode, "user not found")
 		return
@@ -192,12 +195,20 @@ func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
 	if val, ok := a.cache.Get(cacheKey); ok {
 		var profile UserProfile
 		if err := json.Unmarshal(val, &profile); err == nil {
-			api.RespSuccessCode(c, api.MetaFileSuccessCode, &profile)
-			return
+			if completed, err := a.completeProfile(c.Request.Context(), &profile, remoteProfileQueries{
+				{kind: remoteLookupByMetaId, value: metaid},
+				{kind: remoteLookupByAddress, value: metaid},
+			}, metaid); err == nil && completed != nil {
+				if raw, err := json.Marshal(completed); err == nil {
+					a.cache.Set(cacheKey, raw, defaultTTL)
+				}
+				api.RespSuccessCode(c, api.MetaFileSuccessCode, completed)
+				return
+			}
 		}
 	}
 
-	profile, err := a.getProfile(metaid)
+	profile, err := a.lookupByMetaId(c.Request.Context(), metaid)
 	if err != nil || profile == nil {
 		api.RespErr(c, api.MetaFileNotFoundCode, "user not found")
 		return
@@ -219,7 +230,7 @@ func (a *Aggregator) handleGlobalMetaIdInfo(c *gin.Context) {
 	}
 
 	// Try to resolve globalMetaId → metaid
-	profile, err := a.findProfileByGlobalMetaId(globalMetaId)
+	profile, err := a.lookupByGlobalMetaId(c.Request.Context(), globalMetaId)
 	if err != nil || profile == nil {
 		api.RespErr(c, api.MetaFileNotFoundCode, "user not found")
 		return
@@ -243,19 +254,19 @@ func (a *Aggregator) handleGlobalMetaIdInfo(c *gin.Context) {
 // LookupByMetaId returns the profile for a metaid. (nil, nil) means
 // "not found"; non-nil err is a real I/O / decode failure.
 func (a *Aggregator) LookupByMetaId(metaid string) (*UserProfile, error) {
-	return a.getProfile(metaid)
+	return a.lookupByMetaId(context.Background(), metaid)
 }
 
 // LookupByAddress returns the profile whose Address matches (case-insensitive).
 // Currently scans the namespace; userinfo maintains no reverse index yet.
 func (a *Aggregator) LookupByAddress(address string) (*UserProfile, error) {
-	return a.findProfileByAddress(address)
+	return a.lookupByAddress(context.Background(), address)
 }
 
 // LookupByGlobalMetaId returns the profile whose GlobalMetaID matches
 // (case-insensitive). Also scan-based; same caveat as LookupByAddress.
 func (a *Aggregator) LookupByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
-	return a.findProfileByGlobalMetaId(globalMetaId)
+	return a.lookupByGlobalMetaId(context.Background(), globalMetaId)
 }
 
 // --- Profile persistence ---
@@ -278,11 +289,19 @@ func (a *Aggregator) saveProfile(profile *UserProfile) error {
 	if profile.MetaID == "" {
 		return nil
 	}
+	return a.saveProfileAtKey(profile.MetaID, profile)
+}
+
+func (a *Aggregator) saveProfileAtKey(key string, profile *UserProfile) error {
+	key = strings.TrimSpace(key)
+	if key == "" || profile == nil {
+		return nil
+	}
 	raw, err := json.Marshal(profile)
 	if err != nil {
 		return err
 	}
-	return a.store.Set(namespace, profileKey(profile.MetaID), raw)
+	return a.store.Set(namespace, profileKey(key), raw)
 }
 
 func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) {

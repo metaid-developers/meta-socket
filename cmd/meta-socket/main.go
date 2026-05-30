@@ -73,10 +73,9 @@ func main() {
 		if err := aggRegistry.Register(skillserviceAgg); err != nil {
 			log.Printf("WARNING: skillservice aggregator init failed: %v", err)
 		}
-		// Wire skillservice → userinfo for in-process provider profile
-		// resolution. This must stay in-process: the Bot Hub spec
-		// forbids HTTP fanout to manapi or to meta-socket itself from
-		// the request path.
+		// Wire skillservice → userinfo for provider profile resolution.
+		// skillservice itself stays decoupled from remote profile services;
+		// userinfo owns any configured local-first profile completion.
 		skillserviceAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userinfoAgg))
 		// Asset base URL turns chain-declared pin ids / metafile URIs
 		// into HTTP URLs the Bot Hub frontend can load directly. The

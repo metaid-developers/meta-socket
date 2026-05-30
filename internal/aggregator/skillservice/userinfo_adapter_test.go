@@ -1,6 +1,8 @@
 package skillservice
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/metaid-developers/meta-socket/internal/aggregator"
@@ -116,5 +118,75 @@ func TestUserInfoLookupAdapter_NilHandling(t *testing.T) {
 	}
 	if snap, err := adapter.LookupByAddress("x"); snap != nil || err != nil {
 		t.Errorf("nil ui adapter should return (nil, nil), got %v %v", snap, err)
+	}
+}
+
+func TestUserInfoLookupAdapter_RemoteFallbackSuppliesDetailChatKey(t *testing.T) {
+	const providerAddress = "1PaidProviderAddress11111111111111111"
+
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/info/metaid/" + providerAddress:
+			_, _ = w.Write([]byte(`{"code":40400,"message":"user not found"}`))
+		case "/info/address/" + providerAddress:
+			_, _ = w.Write([]byte(`{"code":1,"message":"success","data":{"metaid":"paid_provider_metaid","globalMetaId":"idq1paidprovider","address":"` + providerAddress + `","name":"Paid Provider","chatpubkey":"04paidproviderkey","chatpubkeyId":"paid_key:i0"}}`))
+		default:
+			t.Fatalf("unexpected remote profile path: %s", r.URL.Path)
+		}
+	}))
+	defer remote.Close()
+
+	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
+	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+	cacheProvider := cache.New(store)
+
+	ui := &userinfo.Aggregator{}
+	if err := ui.Init(store, cacheProvider); err != nil {
+		t.Fatalf("userinfo.Init: %v", err)
+	}
+	if _, err := ui.HandleBlockPin(&aggregator.PinInscription{
+		Path:        "/info/name",
+		Operation:   "create",
+		MetaId:      providerAddress,
+		Address:     providerAddress,
+		ChainName:   "mvc",
+		Id:          "paid_name:i0",
+		ContentBody: []byte("Local Paid Provider"),
+	}); err != nil {
+		t.Fatalf("seed local userinfo: %v", err)
+	}
+
+	ssAgg := &Aggregator{}
+	if err := ssAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("skillservice.Init: %v", err)
+	}
+	ssAgg.SetProfileLookup(NewUserInfoLookupAdapter(ui))
+	servicePin := makeServicePin(t, servicePinOpts{
+		PinId: "paid_service:i0", ChainName: "mvc", Operation: OperationCreate,
+		ProviderMetaId: providerAddress,
+		ServiceName:    "paid", DisplayName: "Paid Service", ProviderSkill: "paid-skill",
+		Price: "0.0001", Currency: "SPACE",
+	})
+	servicePin.Address = providerAddress
+	servicePin.CreateAddress = providerAddress
+	servicePin.GlobalMetaId = providerAddress
+	if _, err := ssAgg.HandleBlockPin(servicePin); err != nil {
+		t.Fatalf("seed service: %v", err)
+	}
+
+	detail, err := ssAgg.Detail(DetailParams{ServiceID: "paid_service:i0", ChainName: "mvc"})
+	if err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if detail == nil {
+		t.Fatal("detail not found")
+	}
+	if detail.Provider.ChatPubkey == nil || *detail.Provider.ChatPubkey != "04paidproviderkey" {
+		t.Fatalf("provider chatPubkey missing from detail: %+v", detail.Provider)
 	}
 }

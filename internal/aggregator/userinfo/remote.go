@@ -1,0 +1,356 @@
+package userinfo
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+)
+
+const (
+	defaultProfileMode = "local-first"
+
+	remoteLookupByMetaId       = "metaid"
+	remoteLookupByAddress      = "address"
+	remoteLookupByGlobalMetaId = "globalmetaid"
+)
+
+type remoteProfileLookup interface {
+	LookupByMetaId(ctx context.Context, metaid string) (*UserProfile, error)
+	LookupByAddress(ctx context.Context, address string) (*UserProfile, error)
+	LookupByGlobalMetaId(ctx context.Context, globalMetaId string) (*UserProfile, error)
+}
+
+type remoteProfileQuery struct {
+	kind  string
+	value string
+}
+
+type remoteProfileQueries []remoteProfileQuery
+
+func (a *Aggregator) configureRemoteProfileLookupFromEnv() {
+	a.profileMode = normaliseProfileMode(os.Getenv("META_SOCKET_PROFILE_MODE"))
+	a.allowRemoteFallback = parseBoolEnvDefault(os.Getenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK"), true)
+
+	baseURL := strings.TrimSpace(os.Getenv("META_SOCKET_PROFILE_REMOTE_BASE_URL"))
+	if baseURL == "" || a.profileMode == "local-only" {
+		return
+	}
+	a.remoteLookup = newHTTPRemoteProfileLookup(baseURL)
+}
+
+func normaliseProfileMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "remote-only", "local-only", "local-first":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return defaultProfileMode
+	}
+}
+
+func parseBoolEnvDefault(raw string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return fallback
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	case "0", "false", "f", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func (a *Aggregator) lookupByMetaId(ctx context.Context, metaid string) (*UserProfile, error) {
+	profile, err := a.getProfile(metaid)
+	if err != nil {
+		return nil, err
+	}
+	return a.completeProfile(ctx, profile, remoteProfileQueries{
+		{kind: remoteLookupByMetaId, value: metaid},
+		// Some MVC local views use the address as the MetaID key. If the
+		// remote metaid route misses, the address route can still recover
+		// the canonical profile and chat key.
+		{kind: remoteLookupByAddress, value: metaid},
+	}, metaid)
+}
+
+func (a *Aggregator) lookupByAddress(ctx context.Context, address string) (*UserProfile, error) {
+	profile, err := a.findProfileByAddress(address)
+	if err != nil {
+		return nil, err
+	}
+	return a.completeProfile(ctx, profile, remoteProfileQueries{
+		{kind: remoteLookupByAddress, value: address},
+	}, "")
+}
+
+func (a *Aggregator) lookupByGlobalMetaId(ctx context.Context, globalMetaId string) (*UserProfile, error) {
+	profile, err := a.findProfileByGlobalMetaId(globalMetaId)
+	if err != nil {
+		return nil, err
+	}
+	return a.completeProfile(ctx, profile, remoteProfileQueries{
+		{kind: remoteLookupByGlobalMetaId, value: globalMetaId},
+	}, "")
+}
+
+func (a *Aggregator) completeProfile(ctx context.Context, local *UserProfile, queries remoteProfileQueries, aliasKey string) (*UserProfile, error) {
+	if !a.shouldFetchRemote(local) {
+		return local, nil
+	}
+
+	remote, err := a.fetchRemoteProfile(ctx, queries)
+	if err != nil {
+		log.Printf("[userinfo] remote profile fallback failed: %v", err)
+		return local, nil
+	}
+	if remote == nil {
+		return local, nil
+	}
+
+	merged := mergeUserProfiles(local, remote)
+	if err := a.persistMergedProfile(aliasKey, merged); err != nil {
+		return nil, err
+	}
+	return merged, nil
+}
+
+func (a *Aggregator) shouldFetchRemote(local *UserProfile) bool {
+	if a.remoteLookup == nil || a.profileMode == "local-only" {
+		return false
+	}
+	if a.profileMode == "remote-only" {
+		return true
+	}
+	if !a.allowRemoteFallback {
+		return false
+	}
+	if local == nil {
+		return true
+	}
+	return strings.TrimSpace(local.ChatPublicKey) == "" ||
+		strings.TrimSpace(local.GlobalMetaID) == "" ||
+		strings.TrimSpace(local.Address) == ""
+}
+
+func (a *Aggregator) fetchRemoteProfile(ctx context.Context, queries remoteProfileQueries) (*UserProfile, error) {
+	seen := make(map[string]bool)
+	for _, q := range queries {
+		q.value = strings.TrimSpace(q.value)
+		if q.value == "" {
+			continue
+		}
+		key := q.kind + ":" + q.value
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		var (
+			profile *UserProfile
+			err     error
+		)
+		switch q.kind {
+		case remoteLookupByMetaId:
+			profile, err = a.remoteLookup.LookupByMetaId(ctx, q.value)
+		case remoteLookupByAddress:
+			profile, err = a.remoteLookup.LookupByAddress(ctx, q.value)
+		case remoteLookupByGlobalMetaId:
+			profile, err = a.remoteLookup.LookupByGlobalMetaId(ctx, q.value)
+		default:
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if profile != nil {
+			return profile, nil
+		}
+	}
+	return nil, nil
+}
+
+func (a *Aggregator) persistMergedProfile(aliasKey string, profile *UserProfile) error {
+	if profile == nil {
+		return nil
+	}
+	if err := a.saveProfile(profile); err != nil {
+		return err
+	}
+	if aliasKey = strings.TrimSpace(aliasKey); aliasKey != "" && aliasKey != profile.MetaID {
+		if err := a.saveProfileAtKey(aliasKey, profile); err != nil {
+			return err
+		}
+		a.cache.InvalidateByPrefix("profile:" + aliasKey)
+	}
+	if profile.MetaID != "" {
+		a.cache.InvalidateByPrefix("profile:" + profile.MetaID)
+	}
+	return nil
+}
+
+func mergeUserProfiles(local, remote *UserProfile) *UserProfile {
+	if local == nil {
+		cp := *remote
+		return &cp
+	}
+	out := *local
+
+	// Prefer canonical remote identity fields because local partial MVC
+	// windows can key profiles by address when historical init data is absent.
+	overrideString(&out.MetaID, remote.MetaID)
+	overrideString(&out.GlobalMetaID, remote.GlobalMetaID)
+	overrideString(&out.Address, remote.Address)
+
+	fillString(&out.Name, remote.Name)
+	fillString(&out.NameId, remote.NameId)
+	fillString(&out.Avatar, remote.Avatar)
+	fillString(&out.AvatarId, remote.AvatarId)
+	fillString(&out.NftAvatar, remote.NftAvatar)
+	fillString(&out.Bio, remote.Bio)
+	fillString(&out.BioId, remote.BioId)
+	fillString(&out.Background, remote.Background)
+	fillString(&out.ChatPublicKey, remote.ChatPublicKey)
+	fillString(&out.ChatPublicKeyId, remote.ChatPublicKeyId)
+	fillString(&out.ChainName, remote.ChainName)
+
+	return &out
+}
+
+func fillString(dst *string, src string) {
+	if strings.TrimSpace(*dst) == "" && strings.TrimSpace(src) != "" {
+		*dst = src
+	}
+}
+
+func overrideString(dst *string, src string) {
+	if strings.TrimSpace(src) != "" {
+		*dst = src
+	}
+}
+
+type httpRemoteProfileLookup struct {
+	baseURL string
+	client  *http.Client
+}
+
+func newHTTPRemoteProfileLookup(baseURL string) *httpRemoteProfileLookup {
+	return &httpRemoteProfileLookup{
+		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		client:  &http.Client{Timeout: 3 * time.Second},
+	}
+}
+
+func (l *httpRemoteProfileLookup) LookupByMetaId(ctx context.Context, metaid string) (*UserProfile, error) {
+	return l.lookup(ctx, remoteLookupByMetaId, metaid)
+}
+
+func (l *httpRemoteProfileLookup) LookupByAddress(ctx context.Context, address string) (*UserProfile, error) {
+	return l.lookup(ctx, remoteLookupByAddress, address)
+}
+
+func (l *httpRemoteProfileLookup) LookupByGlobalMetaId(ctx context.Context, globalMetaId string) (*UserProfile, error) {
+	return l.lookup(ctx, remoteLookupByGlobalMetaId, globalMetaId)
+}
+
+func (l *httpRemoteProfileLookup) lookup(ctx context.Context, kind, value string) (*UserProfile, error) {
+	if l == nil || l.baseURL == "" || strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+
+	endpoint := fmt.Sprintf("%s/info/%s/%s", l.baseURL, kind, url.PathEscape(strings.TrimSpace(value)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("remote profile %s returned HTTP %d", kind, resp.StatusCode)
+	}
+
+	var envelope remoteProfileEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, err
+	}
+	if envelope.Code != apiSuccessCode {
+		return nil, nil
+	}
+	return envelope.Data.toUserProfile(), nil
+}
+
+const apiSuccessCode = 1
+
+type remoteProfileEnvelope struct {
+	Code int                  `json:"code"`
+	Data remoteProfilePayload `json:"data"`
+}
+
+type remoteProfilePayload struct {
+	GlobalMetaID    string          `json:"globalMetaId"`
+	MetaID          string          `json:"metaid"`
+	Address         string          `json:"address"`
+	Name            string          `json:"name"`
+	NameId          string          `json:"nameId"`
+	Avatar          string          `json:"avatar"`
+	AvatarId        string          `json:"avatarId"`
+	NftAvatar       string          `json:"nftAvatar"`
+	Bio             json.RawMessage `json:"bio"`
+	BioId           string          `json:"bioId"`
+	Background      string          `json:"background"`
+	ChatPublicKey   string          `json:"chatpubkey"`
+	ChatPublicKeyId string          `json:"chatpubkeyId"`
+	ChainName       string          `json:"chainName"`
+}
+
+func (p remoteProfilePayload) toUserProfile() *UserProfile {
+	if p.MetaID == "" && p.GlobalMetaID == "" && p.Address == "" {
+		return nil
+	}
+	return &UserProfile{
+		GlobalMetaID:    p.GlobalMetaID,
+		MetaID:          p.MetaID,
+		Address:         p.Address,
+		Name:            p.Name,
+		NameId:          p.NameId,
+		Avatar:          p.Avatar,
+		AvatarId:        p.AvatarId,
+		NftAvatar:       p.NftAvatar,
+		Bio:             rawJSONToString(p.Bio),
+		BioId:           p.BioId,
+		Background:      p.Background,
+		ChatPublicKey:   p.ChatPublicKey,
+		ChatPublicKeyId: p.ChatPublicKeyId,
+		ChainName:       p.ChainName,
+	}
+}
+
+func rawJSONToString(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err == nil {
+		return compact.String()
+	}
+	return string(raw)
+}

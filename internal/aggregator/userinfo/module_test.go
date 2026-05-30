@@ -506,6 +506,80 @@ func TestHandleMetaIdInfo_MetafileIndexerPrefix(t *testing.T) {
 	}
 }
 
+func TestHandleMetaIdInfo_RemoteFallbackFillsMissingChatKey(t *testing.T) {
+	const providerAddress = "1ProviderAddress11111111111111111111"
+	const providerMetaID = "823548f91509cc2318f2b2e9205c86d6f4502762a78959e8cb2f026486606ab0"
+
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/info/metaid/" + providerAddress:
+			_, _ = w.Write([]byte(`{"code":40400,"message":"user not found"}`))
+		case "/info/address/" + providerAddress:
+			_, _ = w.Write([]byte(`{"code":1,"message":"success","data":{"metaid":"` + providerMetaID + `","globalMetaId":"idq1provider","address":"` + providerAddress + `","name":"Remote Bot","chatpubkey":"04remotechatkey","chatpubkeyId":"remote_key:i0"}}`))
+		default:
+			t.Fatalf("unexpected remote profile path: %s", r.URL.Path)
+		}
+	}))
+	defer remote.Close()
+
+	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
+	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	// Mirrors the local 30-day MVC index shape from the Bothub issue: a
+	// profile exists under the provider address and has display fields, but
+	// the older /info/chatpubkey pin is outside the local index window.
+	_, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Path:        "/info/name",
+		Operation:   "create",
+		MetaId:      providerAddress,
+		Address:     providerAddress,
+		ChainName:   "mvc",
+		ContentBody: []byte("Local Bot"),
+		Id:          "local_name:i0",
+	})
+	if err != nil {
+		t.Fatalf("seed local profile: %v", err)
+	}
+
+	w := performRequest(t, router, "GET", "/api/info/metaid/"+providerAddress)
+	var resp struct {
+		Code int         `json:"code"`
+		Data UserProfile `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v body=%s", err, w.Body.String())
+	}
+	if resp.Code != 1 {
+		t.Fatalf("expected success code=1, got %d body=%s", resp.Code, w.Body.String())
+	}
+	if resp.Data.ChatPublicKey != "04remotechatkey" {
+		t.Fatalf("chatpubkey was not filled from remote fallback: %+v", resp.Data)
+	}
+	if resp.Data.ChatPublicKeyId != "remote_key:i0" {
+		t.Fatalf("chatpubkeyId mismatch: %+v", resp.Data)
+	}
+	if resp.Data.GlobalMetaID != "idq1provider" {
+		t.Fatalf("globalMetaId should be filled from remote fallback: %+v", resp.Data)
+	}
+
+	raw, err := store.Get(namespace, profileKey(providerAddress))
+	if err != nil || raw == nil {
+		t.Fatalf("stored merged profile missing: raw=%s err=%v", raw, err)
+	}
+	var stored UserProfile
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("decode stored profile: %v", err)
+	}
+	if stored.ChatPublicKey != "04remotechatkey" {
+		t.Fatalf("remote chat key was not persisted: %+v", stored)
+	}
+}
+
 // TestHandleMetaIdInfo_FullWireFormat asserts the whole on-the-wire response
 // exactly matches what idchat's metafileIndexerApi client expects after a
 // realistic init + name + chatpubkey indexing sequence.
