@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -250,6 +251,83 @@ func TestPrivateChatList_ResolvesCanonicalPeerAlias(t *testing.T) {
 	}
 	if resp.Data.List[0].PinId != "provider_reply:i0" {
 		t.Fatalf("pinId: got %q want provider_reply:i0", resp.Data.List[0].PinId)
+	}
+}
+
+func TestCanonicalPrivateChatRoutesMirrorGroupChatCompatibilityRoutes(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	pin := &aggregator.PinInscription{
+		Id:            "canonical_tx:i0",
+		Path:          "/private/chat/simplemsg",
+		Operation:     "create",
+		CreateAddress: "1CanonicalAlice",
+		CreateMetaId:  "alice_canonical",
+		GlobalMetaId:  "global_alice_canonical",
+		ChainName:     "mvc",
+		Timestamp:     1780315000,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			From:        "alice_canonical",
+			To:          "bob_canonical",
+			Content:     "canonical route parity",
+			ContentType: "text/plain",
+			Encrypt:     "none",
+		}),
+	}
+	if _, err := agg.HandleBlockPin(pin); err != nil {
+		t.Fatalf("HandleBlockPin failed: %v", err)
+	}
+
+	cases := []struct {
+		name      string
+		canonical string
+		compat    string
+	}{
+		{
+			name:      "messages",
+			canonical: "/api/private-chat/messages?metaId=alice_canonical&otherMetaId=bob_canonical&cursor=&size=20&timestamp=1780315000",
+			compat:    "/api/group-chat/private-chat-list?metaId=alice_canonical&otherMetaId=bob_canonical&cursor=&size=20&timestamp=1780315000",
+		},
+		{
+			name:      "messages by index",
+			canonical: "/api/private-chat/messages/by-index?metaId=alice_canonical&otherMetaId=bob_canonical&startIndex=0&size=20",
+			compat:    "/api/group-chat/private-chat-list-by-index?metaId=alice_canonical&otherMetaId=bob_canonical&startIndex=0&size=20",
+		},
+		{
+			name:      "paths",
+			canonical: "/api/private-chat/paths?metaId=alice_canonical",
+			compat:    "/api/group-chat/private-group-paths?metaId=alice_canonical",
+		},
+		{
+			name:      "homes",
+			canonical: "/api/private-chat/homes/alice_canonical",
+			compat:    "/api/group-chat/chat/homes/alice_canonical",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			canonical := performRequest(t, router, "GET", tc.canonical)
+			compat := performRequest(t, router, "GET", tc.compat)
+			if canonical.Code != compat.Code {
+				t.Fatalf("status mismatch: canonical=%d compat=%d canonicalBody=%s compatBody=%s",
+					canonical.Code, compat.Code, canonical.Body.String(), compat.Body.String())
+			}
+			var canonicalBody map[string]interface{}
+			var compatBody map[string]interface{}
+			if err := json.Unmarshal(canonical.Body.Bytes(), &canonicalBody); err != nil {
+				t.Fatalf("decode canonical body: %v raw=%s", err, canonical.Body.String())
+			}
+			if err := json.Unmarshal(compat.Body.Bytes(), &compatBody); err != nil {
+				t.Fatalf("decode compat body: %v raw=%s", err, compat.Body.String())
+			}
+			delete(canonicalBody, "processingTime")
+			delete(compatBody, "processingTime")
+			if !reflect.DeepEqual(canonicalBody, compatBody) {
+				t.Fatalf("body mismatch:\ncanonical=%v\ncompat=%v", canonicalBody, compatBody)
+			}
+		})
 	}
 }
 

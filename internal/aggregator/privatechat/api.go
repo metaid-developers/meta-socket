@@ -23,6 +23,16 @@ func registerRoutes(a *Aggregator, router *gin.RouterGroup) {
 
 	// Chat homes: list of conversation partners with last message preview
 	gc.GET("/chat/homes/:metaid", a.handleChatHomes)
+
+	pc := router.Group("/private-chat")
+
+	// Canonical private-chat namespace for native meta-socket clients. These
+	// routes intentionally share handlers with the historical group-chat paths
+	// so response envelopes and query semantics stay identical.
+	pc.GET("/messages", a.handlePrivateChatList)
+	pc.GET("/messages/by-index", a.handlePrivateChatListByIndex)
+	pc.GET("/paths", a.handlePrivateGroupPaths)
+	pc.GET("/homes/:metaid", a.handleChatHomes)
 }
 
 // handlePrivateChatList returns bidirectionally filtered messages between two users

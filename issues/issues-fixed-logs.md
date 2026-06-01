@@ -4,6 +4,59 @@ This file records how downstream-reported issues under `issues/` were handled
 in this repository. Keep the original issue files unchanged as the reporter's
 evidence, and add maintainer-side resolution notes here.
 
+## 2026-06-01 - Bothub production meta-socket endpoint gap
+
+- Issue: `2026-06-01-bothub-production-meta-socket-endpoint-gap.md`
+- Status: Code/API fixed; deployment host assignment remains an ops/runtime
+  action.
+- Maintainer check:
+  - The request is reasonable. Bothub should use a meta-socket root base URL
+    and should not depend on `https://api.idchat.io/chat-api`.
+  - Existing code already exposed CORS globally, `/healthz`, BotHub
+    skill-service routes, and Socket.IO at `/socket/socket.io`.
+  - Existing private-chat routes were only canonical under historical
+    `/api/group-chat/...` paths, with `/chat-api/group-chat/...` retained for
+    idchat compatibility.
+  - A repository code change cannot mint a public production/staging hostname,
+    but the native route surface and reverse-proxy/base-URL contract can be
+    made explicit here for deployment.
+- Fix:
+  - Added canonical native private-chat routes:
+    - `GET /api/private-chat/homes/:metaId`
+    - `GET /api/private-chat/messages`
+    - `GET /api/private-chat/messages/by-index`
+    - `GET /api/private-chat/paths`
+  - These routes reuse the existing private-chat handlers, so response
+    envelopes and query semantics stay identical to the historical
+    `/api/group-chat/...` compatibility routes.
+  - Kept old `/api/group-chat/...` and `/chat-api/group-chat/...` routes
+    working.
+  - Documented Bothub's endpoint contract in
+    `docs/BOTHUB_META_SOCKET_ENDPOINT.md`.
+  - Updated `docs/DEPLOY.md` and `docs/IDCHAT_API_CONTRACT.md` with the root
+    base URL rule, canonical private-chat routes, reverse-proxy shape, and
+    acceptance commands.
+- Verification:
+  - Added red/green route coverage for canonical private-chat aliases in
+    `internal/aggregator/privatechat` and full router registration in
+    `internal/api`.
+  - `CGO_ENABLED=0 go test ./internal/aggregator/privatechat ./internal/api ./internal/aggregator/skillservice -count=1`
+  - `git diff --check`
+  - `CGO_ENABLED=0 go build -o /Users/tusm/.local/bin/meta-socket ./cmd/meta-socket`
+  - Restarted local launch agent
+    `com.metaid.meta-socket.mvc30d.18091`.
+  - Local canonical private-chat checks on `127.0.0.1:18091`:
+    - `/api/private-chat/messages?...` returned `code=0`, `total=57`.
+    - `/api/private-chat/messages/by-index?...` returned `code=0`,
+      `total=57`.
+    - `/api/private-chat/homes/<metaId>` returned `code=0`, `count=6`.
+    - `/api/private-chat/paths?metaId=<metaId>` returned `code=0`,
+      `count=6`.
+  - Canonical route CORS preflight returned HTTP `204` with
+    `Access-Control-Allow-Origin: *`.
+  - Bothub smoke passed:
+    `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`.
+
 ## 2026-06-01 - Bothub AI_Sunny provider chat identity gap
 
 - Issue: `2026-06-01-bothub-ai-sunny-provider-chat-identity-gap.md`

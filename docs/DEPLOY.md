@@ -141,19 +141,79 @@ See [`docs/IDCHAT_CONFIG_CHANGE.md`](./IDCHAT_CONFIG_CHANGE.md) for the exact co
 
 In short: change the idchat `config.json` to point the Socket.IO URL and API base URL at your meta-socket host.
 
+## Connecting Bothub
+
+Bothub should use the root meta-socket origin as its base URL. Do not include
+the historical `/chat-api` prefix in `VITE_META_SOCKET_BASE_URL`; Bothub builds
+native `/api/...` paths itself.
+
+```dotenv
+VITE_META_SOCKET_BASE_URL=https://<meta-socket-host>
+VITE_USE_AGGREGATOR_MOCK=false
+VITE_USE_WS_MOCK=false
+```
+
+The host assigned to Bothub must expose these routes on the same origin:
+
+- `GET /healthz`
+- `GET /api/bot-hub/skill-service/list`
+- `GET /api/bot-hub/skill-service/detail/:serviceId`
+- `GET /api/private-chat/homes/:metaId`
+- `GET /api/private-chat/messages`
+- `GET /api/private-chat/messages/by-index`
+- `GET /api/private-chat/paths`
+- Socket.IO at `/socket/socket.io`
+
+If TLS or a public hostname is provided by nginx/Caddy/another reverse proxy,
+proxy the whole root path to meta-socket; do not mount meta-socket under
+`/chat-api`.
+
+```nginx
+location / {
+  proxy_pass http://127.0.0.1:8080;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location /socket/socket.io/ {
+  proxy_pass http://127.0.0.1:8080;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_set_header Host $host;
+}
+```
+
+Release smoke from the Bothub repo:
+
+```bash
+META_SOCKET_BASE_URL=https://<meta-socket-host> pnpm smoke:meta-socket
+```
+
 ## Verifying the Deployment
 
 ```bash
 # 1. Health check
 curl http://localhost:8080/healthz
 
-# 2. User info (replace ADDRESS with a valid MetaID address)
+# 2. BotHub skill-service list/detail
+curl "http://localhost:8080/api/bot-hub/skill-service/list?size=3&chainName=mvc&sortBy=updated&order=desc"
+curl "http://localhost:8080/api/bot-hub/skill-service/detail/<SERVICE_PIN_ID>?chainName=mvc"
+
+# 3. Canonical private chat aliases for Bothub Delivery
+curl "http://localhost:8080/api/private-chat/homes/<METAID>"
+curl "http://localhost:8080/api/private-chat/messages?metaId=<METAID>&otherMetaId=<OTHER_METAID>&cursor=&size=5"
+curl "http://localhost:8080/api/private-chat/messages/by-index?metaId=<METAID>&otherMetaId=<OTHER_METAID>&startIndex=0&size=5"
+
+# 4. User info (replace ADDRESS with a valid MetaID address)
 curl "http://localhost:8080/api/info/address/<ADDRESS>"
 
-# 3. Group list (replace METAID with a valid metaid)
+# 5. Group list (replace METAID with a valid metaid)
 curl "http://localhost:8080/api/group-chat/group-list?metaId=<METAID>&cursor=&size=10"
 
-# 4. Check Socket.IO is reachable (should get a 200 with engine.io handshake)
+# 6. Check Socket.IO is reachable (should get a 200 with engine.io handshake)
 curl "http://localhost:8080/socket/socket.io/?EIO=4&transport=polling"
 ```
 

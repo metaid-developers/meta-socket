@@ -113,12 +113,28 @@ The path table below omits the deployment prefix for readability.
 
 ## 3. Private Chat
 
+Native canonical prefix for new meta-socket clients: `/api/private-chat/*`
+
+Historical group-chat compatibility prefix: `/api/group-chat/*`
+
+idchat compatibility prefix: `/chat-api/group-chat/*`
+
 | Method | Path | Query | Response `.data` |
 |--------|------|-------|------------------|
 | GET | `/group-chat/private-chat-list` | `otherMetaId, metaId, cursor, size, timestamp` | `{total, nextTimestamp, list: [PrivateMessage]}` |
 | GET | `/group-chat/private-chat-list-by-index` | `otherMetaId, metaId, startIndex, size` | Same shape |
 | GET | `/group-chat/private-group-paths` | `metaId` | `{list: [path]}` |
 | GET | `/group-chat/chat/homes/{metaId}` | — (data as JSON body) | `{data: [HomeEntry]}` |
+
+Canonical private-chat aliases return the same response envelopes and use the
+same query semantics:
+
+| Method | Canonical path | Existing compatibility path |
+|--------|----------------|-----------------------------|
+| GET | `/private-chat/messages` | `/group-chat/private-chat-list` |
+| GET | `/private-chat/messages/by-index` | `/group-chat/private-chat-list-by-index` |
+| GET | `/private-chat/paths` | `/group-chat/private-group-paths` |
+| GET | `/private-chat/homes/{metaId}` | `/group-chat/chat/homes/{metaId}` |
 
 **PrivateMessage shape**: `{fromGlobalMetaId, from, fromAddress, fromUserInfo, toGlobalMetaId, to, toAddress, toUserInfo, txId, pinId, protocol, content, contentType, encryption, timestamp, chain, blockHeight, index}`
 

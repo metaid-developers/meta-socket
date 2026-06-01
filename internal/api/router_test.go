@@ -142,6 +142,49 @@ func TestRouter_PrivateChatRoutesHandledByPrivateChat(t *testing.T) {
 	}
 }
 
+func TestRouter_CanonicalPrivateChatRoutesHandledByPrivateChat(t *testing.T) {
+	router := setupFullRouter(t)
+
+	cases := []struct {
+		path  string
+		shape string // "object_with_list" | "array"
+	}{
+		{"/api/private-chat/messages?metaId=a&otherMetaId=b", "object_with_list"},
+		{"/api/private-chat/messages/by-index?metaId=a&otherMetaId=b", "object_with_list"},
+		{"/api/private-chat/paths?metaId=a", "array"},
+		{"/api/private-chat/homes/some_metaid", "object_with_list"},
+	}
+
+	for _, tc := range cases {
+		w, body := get(t, router, tc.path)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: expected 200, got %d body=%s", tc.path, w.Code, w.Body.String())
+			continue
+		}
+		code, _ := body["code"].(float64)
+		if int(code) != 0 {
+			t.Errorf("%s: expected code=0, got %v body=%s", tc.path, body["code"], w.Body.String())
+			continue
+		}
+
+		switch tc.shape {
+		case "object_with_list":
+			data, ok := body["data"].(map[string]interface{})
+			if !ok {
+				t.Errorf("%s: data is not an object: %v", tc.path, body["data"])
+				continue
+			}
+			if _, present := data["list"]; !present {
+				t.Errorf("%s: expected privatechat field 'list' in data; got data=%v", tc.path, data)
+			}
+		case "array":
+			if _, ok := body["data"].([]interface{}); !ok {
+				t.Errorf("%s: expected data to be array; got %T %v", tc.path, body["data"], body["data"])
+			}
+		}
+	}
+}
+
 // TestRouter_GroupChatRoutesStillWork verifies the surgical change to
 // groupchat/api.go (removing the four private-chat stubs) didn't accidentally
 // break other group-chat endpoints.
