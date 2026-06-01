@@ -40,6 +40,9 @@ The assigned base URL should support:
 - `GET /api/group-chat/private-chat-list-by-index`
 - Socket.IO at `/socket/socket.io`
 
+The `/api/group-chat/...` paths above are private-chat history routes in the
+current meta-socket namespace. Bothub does not need group/channel chat features.
+
 The deployment should also:
 
 - return real indexed MVC skill-service data, not an empty temporary Pebble;
