@@ -7,8 +7,8 @@ evidence, and add maintainer-side resolution notes here.
 ## 2026-06-01 - Bothub skill-service availability gap
 
 - Issue: `2026-06-01-bothub-skill-service-availability-gap.md`
-- Status: Triaged; valid downstream acceptance blocker, but not a new
-  skill-service JSON contract or handler bug in this checkout.
+- Status: Runtime restored after triage; valid downstream acceptance blocker,
+  but not a new skill-service JSON contract or handler bug in this checkout.
 - Maintainer check:
   - Current repo state was clean on `main`, with this issue file already present
     in the latest docs commit.
@@ -24,6 +24,10 @@ evidence, and add maintainer-side resolution notes here.
   - `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket` in
     Bothub reproduced the downstream blocker: `skill-service list returned an
     empty list`.
+  - The previously verified 30-day MVC real-data instance used
+    `/tmp/meta-socket-mvc-30d-pebble` and
+    `com.codex.meta-socket.mvc30d.18091`; that temporary data dir and old
+    launchd job were no longer present on this Mac.
   - `https://api.idchat.io/api/bot-hub/skill-service/list?...` still returned
     nginx `502 Bad Gateway`.
   - `https://api.idchat.io/chat-api/` was healthy for the group-chat service,
@@ -46,6 +50,15 @@ evidence, and add maintainer-side resolution notes here.
     credentials, or publish a documented staging/production base URL where
     native `/api/bot-hub/*` routes are healthy and backed by indexed
     `/protocols/skill-service` data.
+- Runtime follow-up:
+  - Replaced the empty local launchd job with
+    `com.metaid.meta-socket.mvc30d.18091` on `127.0.0.1:18091`.
+  - Built the current binary to `/Users/tusm/.local/bin/meta-socket`.
+  - Moved the MVC Pebble data dir out of `/tmp` to
+    `/Users/tusm/.local/var/meta-socket/mvc-30d-pebble`.
+  - Enabled MVC block indexing from height `170725`; logs show real pins being
+    parsed and `groupchat`, `privatechat`, `userinfo`, and `skillservice`
+    Pebble stores populated.
 - Verification:
   - Local curl for `/healthz`, local BotHub list, and local nonexistent detail.
   - Public curl for `https://api.idchat.io/api/bot-hub/skill-service/list?...`,
@@ -53,6 +66,13 @@ evidence, and add maintainer-side resolution notes here.
     `https://api.idchat.io/chat-api/bot-hub/skill-service/list?...`.
   - `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`
     reproduced the empty-list failure in Bothub.
+  - After runtime restoration, local BotHub list returned a real
+    `botHubSkillService.v1` item (`seedance-service`), detail returned
+    `botHubSkillServiceDetail.v1` with provider data, and the documented group
+    chat sample returned real chain rows.
+  - After runtime restoration,
+    `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`
+    passed in Bothub.
 
 ## 2026-05-31 - Bothub aggregator readiness
 
