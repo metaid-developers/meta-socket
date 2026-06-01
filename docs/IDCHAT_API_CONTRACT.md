@@ -55,9 +55,15 @@ These three `/info/*` endpoints are an exception to the universal `code: 0 = suc
 
 The same three handlers are also mounted under `/metafile-indexer/api/info/*` so idchat can point its existing `metafileIndexerApi` URL (`<host>/metafile-indexer/api`) directly at meta-socket. The native `/api/info/*` paths are kept for new clients that follow meta-socket's standard prefix.
 
-All **other** meta-socket endpoints (`/group-chat/*`, `/push-base/*`, `/healthz`, `/socket/online/*`) continue to use `code: 0 = success`, matching idchat's `TalkApi` / `chat-notify` / `pushBase` clients.
+All **other** meta-socket endpoints use `code: 0 = success`, matching idchat's `TalkApi` / `chat-notify` / `pushBase` clients. Native meta-socket clients use the `/api` prefix (`/api/group-chat/*`, `/api/push-base/*`); idchat compatibility aliases expose the same implemented handlers at `/chat-api/group-chat/*` and `/push-base/*`.
 
 ## 2. Group Chat (`/group-chat/*`)
+
+Native prefix: `/api/group-chat/*`
+
+idchat compatibility prefix: `/chat-api/group-chat/*`
+
+The path table below omits the deployment prefix for readability.
 
 ### Community
 
@@ -117,6 +123,10 @@ All **other** meta-socket endpoints (`/group-chat/*`, `/push-base/*`, `/healthz`
 **PrivateMessage shape**: `{fromGlobalMetaId, from, fromAddress, fromUserInfo, toGlobalMetaId, to, toAddress, toUserInfo, txId, pinId, protocol, content, contentType, encryption, timestamp, chain, blockHeight, index}`
 
 ## 4. Chat Blocking (`/push-base/v1/push/*`)
+
+Native prefix: `/api/push-base/v1/push/*`
+
+idchat compatibility prefix: `/push-base/v1/push/*`
 
 | Method | Path | Auth Headers | Request Body | Response `.data` |
 |--------|------|-------------|-------------|------------------|

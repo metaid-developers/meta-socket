@@ -1,9 +1,11 @@
 package api_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -58,6 +60,17 @@ func get(t *testing.T, router *gin.Engine, path string) (*httptest.ResponseRecor
 	return w, body
 }
 
+func postJSON(t *testing.T, router *gin.Engine, path string, body string) (*httptest.ResponseRecorder, map[string]interface{}) {
+	t.Helper()
+	req, _ := http.NewRequest("POST", path, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var decoded map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &decoded)
+	return w, decoded
+}
+
 // TestRouter_AggregatorRegistrationDoesNotPanic ensures all four aggregators
 // can be registered together without gin panicking on duplicate routes. This
 // is a regression test for the previous state where private-chat routes were
@@ -81,7 +94,7 @@ func TestRouter_AggregatorRegistrationDoesNotPanic(t *testing.T) {
 // stub does not:
 //   - "list"   = data is an object with a "list" field.
 //   - "object" = data is a plain object that must be non-empty (has at least
-//                one of the privatechat fields total/nextCursor/list).
+//     one of the privatechat fields total/nextCursor/list).
 //   - "array"  = data is an array; the stub would have returned {}.
 func TestRouter_PrivateChatRoutesHandledByPrivateChat(t *testing.T) {
 	router := setupFullRouter(t)
@@ -148,6 +161,117 @@ func TestRouter_GroupChatRoutesStillWork(t *testing.T) {
 		}
 		if _, ok := body["code"]; !ok {
 			t.Errorf("%s: missing code field in response: %s", p, w.Body.String())
+		}
+	}
+}
+
+func TestRouter_IDChatChatAPICompatRoutes(t *testing.T) {
+	router := setupFullRouter(t)
+
+	cases := []struct {
+		path  string
+		shape string
+	}{
+		{"/chat-api/group-chat/community/list", "object_with_results"},
+		{"/chat-api/group-chat/group-list?metaId=test", "object_with_list"},
+		{"/chat-api/group-chat/private-chat-list?metaId=a&otherMetaId=b", "object_with_list"},
+	}
+
+	for _, tc := range cases {
+		w, body := get(t, router, tc.path)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: expected 200, got %d body=%s", tc.path, w.Code, w.Body.String())
+			continue
+		}
+		code, _ := body["code"].(float64)
+		if int(code) != 0 {
+			t.Errorf("%s: expected code=0, got %v body=%s", tc.path, body["code"], w.Body.String())
+			continue
+		}
+		data, ok := body["data"].(map[string]interface{})
+		if !ok {
+			t.Errorf("%s: expected object data, got %T %v", tc.path, body["data"], body["data"])
+			continue
+		}
+
+		switch tc.shape {
+		case "object_with_results":
+			if _, present := data["results"]; !present {
+				t.Errorf("%s: expected data.results, got data=%v", tc.path, data)
+			}
+		case "object_with_list":
+			if _, present := data["list"]; !present {
+				t.Errorf("%s: expected data.list, got data=%v", tc.path, data)
+			}
+		}
+	}
+}
+
+func TestRouter_IDChatPushBaseCompatRoutes(t *testing.T) {
+	router := setupFullRouter(t)
+
+	w, body := get(t, router, "/push-base/v1/push/get_user_blocked_chats?metaId=test")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get_user_blocked_chats: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	code, _ := body["code"].(float64)
+	if int(code) != 0 {
+		t.Fatalf("get_user_blocked_chats: expected code=0, got %v body=%s", body["code"], w.Body.String())
+	}
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("get_user_blocked_chats: expected object data, got %T %v", body["data"], body["data"])
+	}
+	if _, present := data["blockedChats"]; !present {
+		t.Fatalf("get_user_blocked_chats: expected blockedChats in data, got %v", data)
+	}
+
+	w, body = postJSON(t, router, "/push-base/v1/push/add_blocked_chat", `{"chatId":"group1","chatType":"group","metaId":"test","reason":"muted"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("add_blocked_chat: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	code, _ = body["code"].(float64)
+	if int(code) != 0 {
+		t.Fatalf("add_blocked_chat: expected code=0, got %v body=%s", body["code"], w.Body.String())
+	}
+}
+
+func TestRouter_IDChatCORSCompat(t *testing.T) {
+	router := setupFullRouter(t)
+
+	req, _ := http.NewRequest("GET", "/chat-api/group-chat/group-list?metaId=test", nil)
+	req.Header.Set("Origin", "https://idchat.io")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /chat-api/group-chat/group-list: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("GET /chat-api/group-chat/group-list: expected Access-Control-Allow-Origin *, got %q", got)
+	}
+
+	req, _ = http.NewRequest("OPTIONS", "/push-base/v1/push/add_blocked_chat", nil)
+	req.Header.Set("Origin", "https://idchat.io")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "X-Signature,X-Public-Key,Content-Type")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS /push-base/v1/push/add_blocked_chat: expected 204, got %d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("OPTIONS /push-base/v1/push/add_blocked_chat: expected Access-Control-Allow-Origin *, got %q", got)
+	}
+	allowHeaders := w.Header().Get("Access-Control-Allow-Headers")
+	for _, header := range []string{"Content-Type", "X-Signature", "X-Public-Key"} {
+		if !strings.Contains(allowHeaders, header) {
+			t.Fatalf("OPTIONS /push-base/v1/push/add_blocked_chat: expected Access-Control-Allow-Headers to include %s, got %q", header, allowHeaders)
+		}
+	}
+	allowMethods := w.Header().Get("Access-Control-Allow-Methods")
+	for _, method := range []string{"GET", "POST", "OPTIONS"} {
+		if !strings.Contains(allowMethods, method) {
+			t.Fatalf("OPTIONS /push-base/v1/push/add_blocked_chat: expected Access-Control-Allow-Methods to include %s, got %q", method, allowMethods)
 		}
 	}
 }

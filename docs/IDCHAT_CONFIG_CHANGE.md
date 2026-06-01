@@ -55,26 +55,38 @@ idchat reads user info today from meta-file-system through the `metafileIndexerA
 
 The other meta-file-system endpoints (`fileApi`, `avatarContentApi`) keep pointing at meta-file-system — meta-socket does not yet provide file upload or `/content/<pinId>` static serving.
 
+### Browser CORS
+
+idchat normally calls the chat API from a browser origin such as `https://idchat.io` to an API origin such as `https://api.idchat.io`. meta-socket therefore sends public CORS headers (`Access-Control-Allow-Origin: *`) and answers `OPTIONS` preflight requests for the compatibility HTTP APIs, including signed `/push-base` POST calls that send `X-Signature` and `X-Public-Key`.
+
 ### Group Chat Endpoints
 
 | Setting | Old Value | New Value |
 |---|---|---|
-| Group chat base path | `/group-chat` | `/group-chat` (unchanged) |
+| idchat `paths.chatApi` | `/chat-api` | `/chat-api` (unchanged) |
+| meta-socket native path | — | `/api/group-chat/*` |
+| idchat compatibility path | `/chat-api/group-chat/*` | `/chat-api/group-chat/*` |
 
-Full URL change: `https://old-host/group-chat/*` -> `http://meta-socket-host:8080/group-chat/*`
+Full URL change: `https://old-host/chat-api/group-chat/*` -> `http://meta-socket-host:8080/chat-api/group-chat/*`
 
-This covers all group and private chat endpoints including:
-- Community: `/group-chat/community/*`
-- Group info/roles/members: `/group-chat/group-*`
-- Chat messages: `/group-chat/group-chat-list-*`, `/group-chat/channel-chat-list-*`
-- Private chat: `/group-chat/private-chat-*`
-- User search: `/group-chat/search-users`
+The `/chat-api/group-chat/*` prefix is an idchat compatibility alias for the existing `/api/group-chat/*` handlers. This covers the lightweight group/private chat routes already implemented by meta-socket, including:
+- Community list/detail: `/chat-api/group-chat/community/list`, `/chat-api/group-chat/community/:communityId`
+- Group info/roles/members: `/chat-api/group-chat/group-*`
+- Chat messages: `/chat-api/group-chat/group-chat-list-v2`, `/chat-api/group-chat/group-chat-list-by-index`
+- Private chat: `/chat-api/group-chat/private-chat-*`, `/chat-api/group-chat/chat/homes/:metaId`
+- User search: `/chat-api/group-chat/search-users`
+
+Not covered in this compatibility pass:
+- Red packet / lucky bag routes such as `/lucky-bag-info`, `/grab-lucky-bag`, and `/generate-lucky-bag-code`.
+- MetaName / ENS resolution routes are still stubs and should not be treated as production-complete.
 
 ### Push / Blocking Endpoints
 
 | Setting | Old Value | New Value |
 |---|---|---|
 | Push base path | `/push-base/v1/push` | `/push-base/v1/push` (unchanged) |
+| meta-socket native path | — | `/api/push-base/v1/push/*` |
+| idchat compatibility path | `/push-base/v1/push/*` | `/push-base/v1/push/*` |
 
 Full URL change: `https://old-host/push-base/v1/push/*` -> `http://meta-socket-host:8080/push-base/v1/push/*`
 
