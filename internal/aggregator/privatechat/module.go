@@ -11,9 +11,10 @@ import (
 // Aggregator implements the aggregator.Aggregator interface for private chat.
 // It provides PebbleDB persistence, HTTP query APIs, and Socket.IO push integration.
 type Aggregator struct {
-	store    *storage.PebbleStore
-	cache    *cache.Cache[[]byte]
-	notifyCh chan *aggregator.NotifyEvent
+	store         *storage.PebbleStore
+	cache         *cache.Cache[[]byte]
+	notifyCh      chan *aggregator.NotifyEvent
+	profileLookup ProfileLookup
 }
 
 const (

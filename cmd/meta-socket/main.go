@@ -66,7 +66,8 @@ func main() {
 		if err := aggRegistry.Register(&groupchat.Aggregator{}); err != nil {
 			log.Printf("WARNING: groupchat aggregator init failed: %v", err)
 		}
-		if err := aggRegistry.Register(&privatechat.Aggregator{}); err != nil {
+		privatechatAgg := &privatechat.Aggregator{}
+		if err := aggRegistry.Register(privatechatAgg); err != nil {
 			log.Printf("WARNING: privatechat aggregator init failed: %v", err)
 		}
 		skillserviceAgg := &skillservice.Aggregator{}
@@ -77,6 +78,7 @@ func main() {
 		// skillservice itself stays decoupled from remote profile services;
 		// userinfo owns any configured local-first profile completion.
 		skillserviceAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userinfoAgg))
+		privatechatAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userinfoAgg))
 		// Asset base URL turns chain-declared pin ids / metafile URIs
 		// into HTTP URLs the Bot Hub frontend can load directly. The
 		// value comes from META_SOCKET_ASSET_BASE_URL (default in

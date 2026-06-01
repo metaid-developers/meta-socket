@@ -187,6 +187,43 @@ func TestListEndpoint_DefaultsNativePaymentMetadataFromProviderAddress(t *testin
 	}
 }
 
+func TestListEndpoint_UsesCanonicalProviderIdentityFromProfile(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId: map[string]*ProfileSnapshot{
+			"1GrqProvider": {
+				MetaId:        "1GrqProvider",
+				GlobalMetaId:  "idq14provider",
+				Address:       "1GrqProvider",
+				Name:          "AI_Sunny",
+				ChatPublicKey: "04sunny",
+			},
+		},
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny-list:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "1GrqProvider", Timestamp: 1000,
+		ServiceName: "metabot-metaid-wiki-service", DisplayName: "MetaID Wiki",
+	})
+
+	_, body := f.call(t, "")
+	if len(body.Data.List) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(body.Data.List))
+	}
+	it := body.Data.List[0]
+	if it.ProviderGlobalMetaId != "idq14provider" {
+		t.Fatalf("providerGlobalMetaId: got %q want canonical idq14provider", it.ProviderGlobalMetaId)
+	}
+	if it.ProviderAddress != "1GrqProvider" {
+		t.Fatalf("providerAddress: got %q want chain address", it.ProviderAddress)
+	}
+
+	_, body = f.call(t, "providerGlobalMetaId=idq14provider")
+	if len(body.Data.List) != 1 {
+		t.Fatalf("expected canonical providerGlobalMetaId filter to match 1 item, got %d", len(body.Data.List))
+	}
+}
+
 // --- AC: revoked / disabled services hidden by default; shown with includeInactive=1 ---
 
 func TestListEndpoint_VisibilityFilter(t *testing.T) {

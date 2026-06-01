@@ -56,6 +56,9 @@ func snapshotFromUserInfo(p *userinfo.UserProfile) *ProfileSnapshot {
 		return nil
 	}
 	return &ProfileSnapshot{
+		MetaId:        p.MetaID,
+		GlobalMetaId:  p.GlobalMetaID,
+		Address:       p.Address,
 		Name:          p.Name,
 		Avatar:        p.Avatar,
 		ChatPublicKey: p.ChatPublicKey,

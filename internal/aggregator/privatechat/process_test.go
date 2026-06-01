@@ -52,6 +52,24 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 	return b
 }
 
+type fakePrivateChatProfileLookup struct {
+	byMetaId       map[string]*IdentityProfile
+	byGlobalMetaId map[string]*IdentityProfile
+	byAddress      map[string]*IdentityProfile
+}
+
+func (f *fakePrivateChatProfileLookup) LookupByMetaId(metaid string) (*IdentityProfile, error) {
+	return f.byMetaId[metaid], nil
+}
+
+func (f *fakePrivateChatProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*IdentityProfile, error) {
+	return f.byGlobalMetaId[globalMetaId], nil
+}
+
+func (f *fakePrivateChatProfileLookup) LookupByAddress(address string) (*IdentityProfile, error) {
+	return f.byAddress[address], nil
+}
+
 // --- AC2: Message persistence ---
 
 func TestPrivateMessagePersistence(t *testing.T) {
@@ -91,8 +109,8 @@ func TestPrivateMessagePersistence(t *testing.T) {
 		"/api/group-chat/private-chat-list?metaId=alice_meta_id&otherMetaId=bob_meta_id&cursor=&size=20")
 
 	var resp struct {
-		Code int                     `json:"code"`
-		Data PrivateChatListResult   `json:"data"`
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -140,6 +158,99 @@ func TestPrivateMessagePersistence(t *testing.T) {
 
 	t.Logf("Message persistence OK: from=%s to=%s content=%s txId=%s pinId=%s",
 		msg.From, msg.To, msg.Content, msg.TxId, msg.PinId)
+}
+
+func TestPrivateChatList_ReadsPersistedMessagesAfterRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	store1 := storage.NewPebbleStore(dataDir)
+	agg1 := &Aggregator{}
+	if err := agg1.Init(store1, cache.New(store1)); err != nil {
+		t.Fatalf("init first aggregator: %v", err)
+	}
+
+	if err := agg1.SavePrivateMessage(&PrivateMessage{
+		From:      "1GrqProvider",
+		To:        "idqBuyer",
+		TxId:      "restart-tx",
+		PinId:     "restart-pin:i0",
+		Content:   "persisted",
+		Timestamp: 1780313024,
+	}); err != nil {
+		t.Fatalf("save message: %v", err)
+	}
+	if err := store1.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	store2 := storage.NewPebbleStore(dataDir)
+	defer store2.Close()
+	agg2 := &Aggregator{}
+	if err := agg2.Init(store2, cache.New(store2)); err != nil {
+		t.Fatalf("init restarted aggregator: %v", err)
+	}
+
+	got, err := agg2.GetPrivateChatList("idqBuyer", "1GrqProvider", "", 20)
+	if err != nil {
+		t.Fatalf("GetPrivateChatList after restart: %v", err)
+	}
+	if got.Total != 1 || len(got.List) != 1 {
+		t.Fatalf("expected persisted message after restart, total=%d len=%d", got.Total, len(got.List))
+	}
+	if got.List[0].PinId != "restart-pin:i0" {
+		t.Fatalf("pinId: got %q want restart-pin:i0", got.List[0].PinId)
+	}
+}
+
+func TestPrivateChatList_ResolvesCanonicalPeerAlias(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+	agg.SetProfileLookup(&fakePrivateChatProfileLookup{
+		byGlobalMetaId: map[string]*IdentityProfile{
+			"idq14provider": {MetaId: "1GrqProvider", GlobalMetaId: "idq14provider", Address: "1GrqProvider"},
+		},
+	})
+
+	pin := &aggregator.PinInscription{
+		Id:            "provider_reply:i0",
+		Path:          "/private/chat/simplemsg",
+		Operation:     "create",
+		CreateAddress: "1GrqProvider",
+		CreateMetaId:  "1GrqProvider",
+		GlobalMetaId:  "1GrqProvider",
+		ChainName:     "mvc",
+		Timestamp:     1780313024,
+		GenesisHeight: 175637,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			From:        "1GrqProvider",
+			To:          "idqBuyer",
+			Content:     "[ORDER_STATUS:buyer_pin] done",
+			ContentType: "text/plain",
+			Encrypt:     "none",
+		}),
+	}
+	if _, err := agg.HandleBlockPin(pin); err != nil {
+		t.Fatalf("HandleBlockPin failed: %v", err)
+	}
+
+	w := performRequest(t, router, "GET",
+		"/api/group-chat/private-chat-list?metaId=idqBuyer&otherMetaId=idq14provider&cursor=&size=20")
+
+	var resp struct {
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v raw=%s", err, w.Body.String())
+	}
+	if resp.Code != 0 {
+		t.Fatalf("expected code=0, got %d: %s", resp.Code, w.Body.String())
+	}
+	if resp.Data.Total != 1 || len(resp.Data.List) != 1 {
+		t.Fatalf("expected aliased message, total=%d len=%d body=%s", resp.Data.Total, len(resp.Data.List), w.Body.String())
+	}
+	if resp.Data.List[0].PinId != "provider_reply:i0" {
+		t.Fatalf("pinId: got %q want provider_reply:i0", resp.Data.List[0].PinId)
+	}
 }
 
 // --- AC3: Bidirectional query and cursor pagination ---
@@ -196,8 +307,8 @@ func TestBidirectionalPagination(t *testing.T) {
 	w := performRequest(t, router, "GET",
 		"/api/group-chat/private-chat-list?metaId=alice_pag&otherMetaId=bob_pag&cursor=&size=20")
 	var resp struct {
-		Code int                     `json:"code"`
-		Data PrivateChatListResult   `json:"data"`
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -230,8 +341,8 @@ func TestBidirectionalPagination(t *testing.T) {
 		w2 := performRequest(t, router, "GET",
 			fmt.Sprintf("/api/group-chat/private-chat-list?metaId=alice_pag&otherMetaId=bob_pag&cursor=%s&size=20", cursor))
 		var pageResp struct {
-			Code int                     `json:"code"`
-			Data PrivateChatListResult   `json:"data"`
+			Code int                   `json:"code"`
+			Data PrivateChatListResult `json:"data"`
 		}
 		json.Unmarshal(w2.Body.Bytes(), &pageResp)
 
@@ -284,8 +395,8 @@ func TestPrivateChatListByIndex(t *testing.T) {
 	w := performRequest(t, router, "GET",
 		"/api/group-chat/private-chat-list-by-index?metaId=alice_idx&otherMetaId=bob_idx&startIndex=0&size=20")
 	var resp struct {
-		Code int                     `json:"code"`
-		Data PrivateChatListResult   `json:"data"`
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -307,8 +418,8 @@ func TestPrivateChatListByIndex(t *testing.T) {
 	w2 := performRequest(t, router, "GET",
 		"/api/group-chat/private-chat-list-by-index?metaId=alice_idx&otherMetaId=bob_idx&startIndex=20&size=20")
 	var resp2 struct {
-		Code int                     `json:"code"`
-		Data PrivateChatListResult   `json:"data"`
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
 	}
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
 
@@ -392,7 +503,7 @@ func TestPrivateChatHomes(t *testing.T) {
 	// Query Alice's homes
 	w := performRequest(t, router, "GET", "/api/group-chat/chat/homes/alice_home")
 	var resp struct {
-		Code int         `json:"code"`
+		Code int `json:"code"`
 		Data struct {
 			List []PrivateChatHome `json:"list"`
 		} `json:"data"`
@@ -436,7 +547,7 @@ func TestPrivateChatHomes(t *testing.T) {
 	// Also verify Bob's homes (Bob only has Alice)
 	w2 := performRequest(t, router, "GET", "/api/group-chat/chat/homes/bob_home")
 	var resp2 struct {
-		Code int         `json:"code"`
+		Code int `json:"code"`
 		Data struct {
 			List []PrivateChatHome `json:"list"`
 		} `json:"data"`
@@ -770,8 +881,8 @@ func TestPrivateChatListByIndex_OutOfRange(t *testing.T) {
 	w := performRequest(t, router, "GET",
 		"/api/group-chat/private-chat-list-by-index?metaId=alice_oor&otherMetaId=bob_oor&startIndex=999&size=20")
 	var resp struct {
-		Code int                     `json:"code"`
-		Data PrivateChatListResult   `json:"data"`
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -790,7 +901,7 @@ func TestPrivateChatList_MissingParams(t *testing.T) {
 	// Missing metaId
 	w := performRequest(t, router, "GET", "/api/group-chat/private-chat-list?otherMetaId=bob&cursor=&size=20")
 	var resp struct {
-		Code int    `json:"code"`
+		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
@@ -801,7 +912,7 @@ func TestPrivateChatList_MissingParams(t *testing.T) {
 	// Missing otherMetaId
 	w2 := performRequest(t, router, "GET", "/api/group-chat/private-chat-list?metaId=alice&cursor=&size=20")
 	var resp2 struct {
-		Code int    `json:"code"`
+		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
@@ -838,8 +949,8 @@ func TestBidirectionalQuery_DirectionInvariance(t *testing.T) {
 	w1 := performRequest(t, router, "GET",
 		"/api/group-chat/private-chat-list?metaId=alice_dir&otherMetaId=bob_dir&cursor=&size=20")
 	var resp1 struct {
-		Code int                     `json:"code"`
-		Data PrivateChatListResult   `json:"data"`
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
 	}
 	json.Unmarshal(w1.Body.Bytes(), &resp1)
 
@@ -847,8 +958,8 @@ func TestBidirectionalQuery_DirectionInvariance(t *testing.T) {
 	w2 := performRequest(t, router, "GET",
 		"/api/group-chat/private-chat-list?metaId=bob_dir&otherMetaId=alice_dir&cursor=&size=20")
 	var resp2 struct {
-		Code int                     `json:"code"`
-		Data PrivateChatListResult   `json:"data"`
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
 	}
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
 
@@ -872,7 +983,7 @@ func TestPrivateChatHomes_EmptyUser(t *testing.T) {
 
 	w := performRequest(t, router, "GET", "/api/group-chat/chat/homes/no_one")
 	var resp struct {
-		Code int         `json:"code"`
+		Code int `json:"code"`
 		Data struct {
 			List []PrivateChatHome `json:"list"`
 		} `json:"data"`

@@ -134,9 +134,6 @@ func (a *Aggregator) List(p ListParams) (*ListResult, error) {
 		if !matchesOutputTypeFilter(rec, p.OutputType) {
 			continue
 		}
-		if !matchesProviderFilter(rec, p.ProviderGlobalMetaId) {
-			continue
-		}
 		// Provider name keyword match needs the resolved snapshot, so we
 		// compute it once per record and stash it for step 3 too.
 		filtered = append(filtered, rec)
@@ -149,6 +146,9 @@ func (a *Aggregator) List(p ListParams) (*ListResult, error) {
 		snap := a.ResolveProvider(rec)
 		agg, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
 		exp := expandedRecord{rec: rec, profile: snap, rating: agg}
+		if !matchesProviderFilter(exp, p.ProviderGlobalMetaId) {
+			continue
+		}
 		if !matchesKeywordFilter(exp, p.Keyword) {
 			continue
 		}
@@ -270,11 +270,24 @@ func matchesOutputTypeFilter(rec *ServiceRecord, want string) bool {
 	return strings.EqualFold(rec.OutputType, want)
 }
 
-func matchesProviderFilter(rec *ServiceRecord, want string) bool {
+func matchesProviderFilter(exp expandedRecord, want string) bool {
 	if want == "" {
 		return true
 	}
-	return strings.EqualFold(rec.ProviderGlobalMetaId, want)
+	candidates := []string{
+		exp.profile.GlobalMetaId,
+		exp.rec.ProviderGlobalMetaId,
+		exp.profile.MetaId,
+		exp.rec.ProviderMetaId,
+		exp.profile.Address,
+		exp.rec.ProviderAddress,
+	}
+	for _, candidate := range candidates {
+		if strings.EqualFold(candidate, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesKeywordFilter(exp expandedRecord, kw string) bool {
@@ -430,9 +443,9 @@ func (a *Aggregator) toListItem(exp expandedRecord) ServiceListItem {
 		MRC20Id:        payment.mrc20Id,
 		PaymentAddress: payment.paymentAddress,
 
-		ProviderMetaId:       rec.ProviderMetaId,
-		ProviderGlobalMetaId: rec.ProviderGlobalMetaId,
-		ProviderAddress:      rec.ProviderAddress,
+		ProviderMetaId:       firstNonEmpty(exp.profile.MetaId, rec.ProviderMetaId),
+		ProviderGlobalMetaId: firstNonEmpty(exp.profile.GlobalMetaId, rec.ProviderGlobalMetaId),
+		ProviderAddress:      firstNonEmpty(exp.profile.Address, rec.ProviderAddress),
 		ProviderName:         exp.profile.Name,
 		ProviderAvatar:       a.ResolveAsset(exp.profile.Avatar),
 		ProviderChatPubkey:   exp.profile.ChatPublicKey,

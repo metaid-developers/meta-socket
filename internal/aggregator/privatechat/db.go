@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -87,18 +88,7 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 // with cursor-based pagination (descending by timestamp, newest first).
 // The cursor is a base64-encoded offset.
 func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr string, size int64) (*PrivateChatListResult, error) {
-	prefix := pchatPrefix(myMetaId, otherMetaId)
-
-	// Collect all messages in ascending order (oldest first by key)
-	var allMessages []*PrivateMessage
-	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
-		var msg PrivateMessage
-		if e := json.Unmarshal(value, &msg); e != nil {
-			return nil
-		}
-		allMessages = append(allMessages, &msg)
-		return nil
-	})
+	allMessages := a.collectPrivateMessages(myMetaId, otherMetaId)
 
 	total := int64(len(allMessages))
 
@@ -148,17 +138,7 @@ func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr 
 
 // GetPrivateChatListByIndex returns messages by startIndex (descending by timestamp, newest first).
 func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, startIndex int64, size int64) (*PrivateChatListResult, error) {
-	prefix := pchatPrefix(myMetaId, otherMetaId)
-
-	var allMessages []*PrivateMessage
-	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
-		var msg PrivateMessage
-		if e := json.Unmarshal(value, &msg); e != nil {
-			return nil
-		}
-		allMessages = append(allMessages, &msg)
-		return nil
-	})
+	allMessages := a.collectPrivateMessages(myMetaId, otherMetaId)
 
 	total := int64(len(allMessages))
 
@@ -183,6 +163,54 @@ func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, sta
 		NextTimestamp: nextTimestamp,
 		List:          messages,
 	}, nil
+}
+
+func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) []*PrivateMessage {
+	myAliases := a.identityAliases(myMetaId)
+	otherAliases := a.identityAliases(otherMetaId)
+	if len(myAliases) == 0 || len(otherAliases) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var allMessages []*PrivateMessage
+	for _, my := range myAliases {
+		for _, other := range otherAliases {
+			prefix := pchatPrefix(my, other)
+			a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
+				var msg PrivateMessage
+				if e := json.Unmarshal(value, &msg); e != nil {
+					return nil
+				}
+				keyID := privateMessageDedupeKey(&msg)
+				if seen[keyID] {
+					return nil
+				}
+				seen[keyID] = true
+				allMessages = append(allMessages, &msg)
+				return nil
+			})
+		}
+	}
+
+	sort.SliceStable(allMessages, func(i, j int) bool {
+		if allMessages[i].Timestamp != allMessages[j].Timestamp {
+			return allMessages[i].Timestamp < allMessages[j].Timestamp
+		}
+		return privateMessageDedupeKey(allMessages[i]) < privateMessageDedupeKey(allMessages[j])
+	})
+
+	return allMessages
+}
+
+func privateMessageDedupeKey(msg *PrivateMessage) string {
+	if msg == nil {
+		return ""
+	}
+	if msg.PinId != "" {
+		return msg.PinId
+	}
+	return msg.TxId + ":" + msg.From + ":" + msg.To
 }
 
 // GetPrivateChatHomes returns a list of conversation partners with last message preview.

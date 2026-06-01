@@ -4,6 +4,59 @@ This file records how downstream-reported issues under `issues/` were handled
 in this repository. Keep the original issue files unchanged as the reporter's
 evidence, and add maintainer-side resolution notes here.
 
+## 2026-06-01 - Bothub AI_Sunny provider chat identity gap
+
+- Issue: `2026-06-01-bothub-ai-sunny-provider-chat-identity-gap.md`
+- Status: Fixed.
+- Maintainer check:
+  - The issue was reasonable and reproduced against local `127.0.0.1:18091`.
+  - BotHub detail for
+    `e9a7064693dfdcbea381c8355c3c91c0ba3947abee816287774729c432378e61i0`
+    returned AI_Sunny provider identity as the legacy chain address
+    `1GrqX7K9jdnUor8hAoAfDx99uFH2tT75Za`.
+  - `userinfo` already resolved that provider to canonical globalMetaId
+    `idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz`, but BotHub list/detail
+    did not preserve the profile identity fields.
+  - Private chat persisted messages under the simplemsg `from/to` identity
+    pair, so querying with the canonical provider peer had to resolve aliases
+    to see messages stored under the legacy address.
+  - After restart, persisted private-chat data was also not visible until a
+    namespace write reopened the Pebble DB; the read path needed to open the
+    namespace on demand.
+- Fix:
+  - Extended BotHub provider profile snapshots to carry canonical
+    MetaID/globalMetaId/address from `userinfo`.
+  - BotHub list/detail now prefer canonical provider identity from profile and
+    keep `providerAddress` as the chain/payment address.
+  - BotHub `providerGlobalMetaId` list filtering now matches the resolved
+    provider identity set, so canonical IDs and legacy aliases both work.
+  - Private-chat list/list-by-index resolve both participants through
+    `userinfo` aliases and scan all alias pair prefixes with de-duplication.
+  - `main` wires private-chat to the in-process `userinfo` lookup.
+  - Pebble `ScanPrefix` now opens a namespace on demand, restoring historical
+    private-chat reads immediately after process restart.
+- Verification:
+  - `CGO_ENABLED=0 go test ./internal/aggregator/skillservice ./internal/aggregator/privatechat ./internal/aggregator/userinfo ./internal/api -count=1`
+  - `git diff --check`
+  - `CGO_ENABLED=0 go build -o /Users/tusm/.local/bin/meta-socket ./cmd/meta-socket`
+  - Restarted local launch agent
+    `com.metaid.meta-socket.mvc30d.18091`.
+  - Local detail now returns `provider.globalMetaId` as
+    `idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz` and `provider.address` as
+    `1GrqX7K9jdnUor8hAoAfDx99uFH2tT75Za`.
+  - Local list filtered by AI_Sunny canonical `providerGlobalMetaId` returns
+    the wiki service.
+  - Local private-chat query with `otherMetaId=idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz`
+    returns `total=57`, including AI_Sunny reply pins
+    `42c3f0ab816e06e749e9394caa7bebdf7cdf98125984a024be0a75cb74fef022i0`,
+    `2f26c872f019bc65036e79eb05e8af795d52c69afe0f34e52cd1c73bb5511ac2i0`,
+    and `0299ef93ada6171276aaa218a5accc2e5bcd567538e61a0e3b1f58c1aa5d537ei0`
+    at block height `175638`.
+  - Local indexer was caught up: local height `175640`, remote height
+    `175640`, lag `0`.
+  - Bothub smoke passed:
+    `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`.
+
 ## 2026-06-01 - Bothub paid service payment metadata gap
 
 - Issue: `2026-06-01-bothub-paid-service-payment-metadata-gap.md`

@@ -9,18 +9,20 @@ import "strings"
 // add or rename in the future cannot accidentally leak into Bot Hub
 // responses.
 //
-// Fields here are exactly the four pieces the spec asks the list endpoint
-// to populate on each item:
+// Fields here are exactly the provider profile pieces the spec asks the
+// BotHub endpoints to populate:
+//   - MetaId         → providerMetaId / provider.metaid
+//   - GlobalMetaId   → providerGlobalMetaId / provider.globalMetaId
+//   - Address        → providerAddress / provider.address
 //   - Name           → providerName
 //   - Avatar         → providerAvatar (relative path or absolute URL,
-//                      asset URL resolution lands in M4)
+//     asset URL resolution lands in M4)
 //   - ChatPublicKey  → providerChatPubkey (the communication addressing
-//                      field; missing is allowed and surfaces as "")
-//
-// MetaId / GlobalMetaId / Address are NOT carried here because the
-// skillservice ServiceRecord already stores them from the original PIN
-// metadata.
+//     field; missing is allowed and surfaces as "")
 type ProfileSnapshot struct {
+	MetaId        string
+	GlobalMetaId  string
+	Address       string
 	Name          string
 	Avatar        string
 	ChatPublicKey string

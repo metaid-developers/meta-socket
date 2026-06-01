@@ -139,6 +139,36 @@ func TestDetailEndpoint_DefaultsNativePaymentMetadataFromProviderAddress(t *test
 	}
 }
 
+func TestDetailEndpoint_UsesCanonicalProviderIdentityFromProfile(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId: map[string]*ProfileSnapshot{
+			"1GrqProvider": {
+				MetaId:        "1GrqProvider",
+				GlobalMetaId:  "idq14provider",
+				Address:       "1GrqProvider",
+				Name:          "AI_Sunny",
+				ChatPublicKey: "04sunny",
+			},
+		},
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny:i0", ChainName: "mvc", Operation: OperationCreate,
+		ProviderMetaId: "1GrqProvider", DisplayName: "MetaID Wiki", ServiceName: "metabot-metaid-wiki-service",
+	})
+
+	_, body := f.callDetail(t, "sunny:i0", "chainName=mvc")
+	if body.Code != 0 {
+		t.Fatalf("code=%d", body.Code)
+	}
+	if body.Data.Provider.GlobalMetaId != "idq14provider" {
+		t.Fatalf("provider.globalMetaId: got %q want canonical idq14provider", body.Data.Provider.GlobalMetaId)
+	}
+	if body.Data.Provider.Address != "1GrqProvider" {
+		t.Fatalf("provider.address: got %q want chain address", body.Data.Provider.Address)
+	}
+}
+
 func TestDetailEndpoint_InvalidIDType(t *testing.T) {
 	f := newListFixture(t)
 	_, body := f.callDetail(t, "x", "idType=bad")

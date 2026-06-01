@@ -203,9 +203,9 @@ func (a *Aggregator) toServiceDetail(rec *ServiceRecord) ServiceDetail {
 
 func (a *Aggregator) toDetailProvider(rec *ServiceRecord, profile ProfileSnapshot) DetailProvider {
 	out := DetailProvider{
-		MetaId:       rec.ProviderMetaId,
-		GlobalMetaId: rec.ProviderGlobalMetaId,
-		Address:      rec.ProviderAddress,
+		MetaId:       firstNonEmpty(profile.MetaId, rec.ProviderMetaId),
+		GlobalMetaId: firstNonEmpty(profile.GlobalMetaId, rec.ProviderGlobalMetaId),
+		Address:      firstNonEmpty(profile.Address, rec.ProviderAddress),
 		Name:         profile.Name,
 		Avatar:       a.ResolveAsset(profile.Avatar),
 	}

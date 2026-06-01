@@ -142,9 +142,9 @@ func (s *PebbleStore) DeleteByPrefix(namespace string, prefix []byte) error {
 // ScanPrefix iterates over all keys matching the prefix and calls fn for each.
 // If fn returns an error, iteration stops.
 func (s *PebbleStore) ScanPrefix(namespace string, prefix []byte, fn func(key, value []byte) error) error {
-	db := s.GetDB(namespace)
-	if db == nil {
-		return nil
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
 	}
 
 	iter, err := db.NewIter(&pebble.IterOptions{
