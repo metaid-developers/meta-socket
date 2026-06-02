@@ -229,7 +229,7 @@ enabled = false
 network = "mvc-mainnet"
 nodePrivateKey = ""
 publicBaseUrl = ""
-manapiBaseUrl = "https://manapi.metaid.io"
+manapiBaseUrl = "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}"
 metaletBaseUrl = "https://www.metalet.space"
 registryPath = "/protocols/metasocket-node"
 presencePath = "/.well-known/metasocket/presence"
@@ -288,7 +288,40 @@ Metalet wallet API 约束来自
 
 ## MANAPI Discovery
 
-Discovery adapter 通过 MANAPI 拉取 `/protocols/metasocket-node` pins，并处理：
+Discovery adapter 通过 MANAPI 拉取 `/protocols/metasocket-node` pins。第一版默认使用
+MANAPI path-list endpoint template：
+
+```text
+https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}
+```
+
+`{protocol-path}` 替换为 `/protocols/metasocket-node`，`{size}` 默认替换为
+`100`。默认展开后的测试 URL 是：
+
+```text
+https://manapi.metaid.io/pin/path/list?path=/protocols/metasocket-node&size=100
+```
+
+该 URL 也可以用于人工检测 `metasocket-node` 协议是否已经成功上链。
+
+MANAPI response 的第一版适配目标：
+
+```json
+{
+  "code": 1,
+  "message": "ok",
+  "data": {
+    "list": [],
+    "nextCursor": "",
+    "total": 0
+  }
+}
+```
+
+当协议路径暂无数据时，`data.list` 可能是 `null`，实现必须按空列表处理。
+当 item 的 `contentBody` 为空时，应 fallback 解析 `contentSummary`。
+
+Discovery adapter 处理规则：
 
 1. 只接受 `chainName=mvc`。
 2. 只接受 `operation=create|modify|revoke`。

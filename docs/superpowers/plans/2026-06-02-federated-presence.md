@@ -177,6 +177,7 @@ Expected defaults:
 
 - `Enabled=false`
 - `Network="mvc-mainnet"`
+- `MANAPIBaseURL="https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}"`
 - `RegistryPath="/protocols/metasocket-node"`
 - `PresencePath="/.well-known/metasocket/presence"`
 - `RegistryRenewInterval=6*time.Hour`
@@ -230,7 +231,8 @@ Enabled-mode validation must require:
 
 - `nodePrivateKey`
 - `publicBaseURL`
-- `manapiBaseURL`
+- `manapiBaseURL`, which must be a MANAPI path-list URL template containing
+  `{protocol-path}` and `{size}` for the first version
 - `metaletBaseURL`
 - `registryPath` and `presencePath` starting with `/`
 - positive duration values
@@ -853,8 +855,16 @@ Then use `metabot-post-buzz`.
 
 Use `httptest.Server` and cover:
 
-- Queries registry path `/protocols/metasocket-node`.
+- Expands the default MANAPI URL template
+  `https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}`
+  into a request equivalent to
+  `/pin/path/list?path=/protocols/metasocket-node&size=100`.
+- URL-encodes the protocol path correctly if the implementation uses `url.Values`.
+- Accepts MANAPI response envelope `code=1,message=ok,data.list,nextCursor,total`.
+- Treats `data.list=null` as an empty peer list.
 - Accepts MVC create/modify pins with valid payload.
+- Parses registry payload from `contentBody`, falling back to `contentSummary` when
+  `contentBody` is empty.
 - Drops revoke pins.
 - Drops expired `validUntil`.
 - Deduplicates by `nodeId`, newest valid pin wins.
@@ -874,6 +884,34 @@ Expected: FAIL because discovery does not exist.
 
 Create a small DTO for remote MANAPI pin responses. Do not pass raw remote JSON into the store.
 
+The first-version default discovery URL is a path-list template:
+
+```text
+https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}
+```
+
+For `/protocols/metasocket-node` with size `100`, the request should be equivalent to:
+
+```text
+https://manapi.metaid.io/pin/path/list?path=/protocols/metasocket-node&size=100
+```
+
+The response envelope shape is:
+
+```go
+type MANAPIPathListResponse struct {
+    Code int `json:"code"`       // success is 1
+    Message string `json:"message"`
+    Data MANAPIPathListData `json:"data"`
+}
+
+type MANAPIPathListData struct {
+    List []MANAPIPin `json:"list"` // null must decode/normalize to empty
+    NextCursor string `json:"nextCursor"`
+    Total int `json:"total"`
+}
+```
+
 If the exact MANAPI endpoint shape differs from this plan, isolate it in one adapter method and keep the store input stable:
 
 ```go
@@ -883,8 +921,13 @@ type RegistryPin struct {
     ChainName string
     Timestamp int64
     ContentBody []byte
+    ContentSummary string
 }
 ```
+
+When converting `MANAPIPin` to `RegistryPin`, parse JSON payload from `contentBody`
+first and fallback to `contentSummary`. This matches the current MANAPI path-list
+shape where some pins expose JSON summary while `contentBody` is empty.
 
 - [ ] **Step 4: Implement poll loop**
 
@@ -1045,50 +1088,49 @@ that real shape instead; otherwise use this mock response:
 
 ```json
 {
-  "code": 0,
+  "code": 1,
+  "message": "ok",
   "data": {
     "list": [
       {
         "id": "mock-node-a-pin",
         "operation": "create",
+        "path": "/protocols/metasocket-node",
+        "contentType": "application/json",
         "chainName": "mvc",
         "timestamp": 1780000000,
-        "contentBody": {
-          "protocol": "metasocket-node",
-          "version": "1.0.0",
-          "nodeId": "mvc:node-a",
-          "network": "mvc-testnet",
-          "publicBaseUrl": "http://127.0.0.1:18091",
-          "socketUrl": "http://127.0.0.1:18091/socket/socket.io",
-          "presenceUrl": "http://127.0.0.1:18091/.well-known/metasocket/presence",
-          "publicKey": "02abcdef...",
-          "capabilities": ["presence-v1"],
-          "publishedAt": 1780000000000,
-          "validUntil": 1780086400000
-        }
+        "contentBody": "",
+        "contentSummary": "{\"protocol\":\"metasocket-node\",\"version\":\"1.0.0\",\"nodeId\":\"mvc:node-a\",\"network\":\"mvc-testnet\",\"publicBaseUrl\":\"http://127.0.0.1:18091\",\"socketUrl\":\"http://127.0.0.1:18091/socket/socket.io\",\"presenceUrl\":\"http://127.0.0.1:18091/.well-known/metasocket/presence\",\"publicKey\":\"02abcdef...\",\"capabilities\":[\"presence-v1\"],\"publishedAt\":1780000000000,\"validUntil\":1780086400000}"
       },
       {
         "id": "mock-node-b-pin",
         "operation": "create",
+        "path": "/protocols/metasocket-node",
+        "contentType": "application/json",
         "chainName": "mvc",
         "timestamp": 1780000001,
-        "contentBody": {
-          "protocol": "metasocket-node",
-          "version": "1.0.0",
-          "nodeId": "mvc:node-b",
-          "network": "mvc-testnet",
-          "publicBaseUrl": "http://127.0.0.1:18092",
-          "socketUrl": "http://127.0.0.1:18092/socket/socket.io",
-          "presenceUrl": "http://127.0.0.1:18092/.well-known/metasocket/presence",
-          "publicKey": "02fedcba...",
-          "capabilities": ["presence-v1"],
-          "publishedAt": 1780000001000,
-          "validUntil": 1780086401000
-        }
+        "contentBody": "",
+        "contentSummary": "{\"protocol\":\"metasocket-node\",\"version\":\"1.0.0\",\"nodeId\":\"mvc:node-b\",\"network\":\"mvc-testnet\",\"publicBaseUrl\":\"http://127.0.0.1:18092\",\"socketUrl\":\"http://127.0.0.1:18092/socket/socket.io\",\"presenceUrl\":\"http://127.0.0.1:18092/.well-known/metasocket/presence\",\"publicKey\":\"02fedcba...\",\"capabilities\":[\"presence-v1\"],\"publishedAt\":1780000001000,\"validUntil\":1780086401000}"
       }
-    ]
-  },
-  "message": ""
+    ],
+    "nextCursor": "",
+    "total": 2
+  }
+}
+```
+
+When the smoke test uses the real MANAPI path-list endpoint, the equivalent empty
+response for an unpublished protocol is:
+
+```json
+{
+  "code": 1,
+  "message": "ok",
+  "data": {
+    "list": null,
+    "nextCursor": "",
+    "total": 0
+  }
 }
 ```
 
