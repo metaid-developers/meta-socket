@@ -135,6 +135,22 @@ func (s *Store) RemovePeer(nodeID string) {
 	delete(s.snapshots, nodeID)
 }
 
+// Peer returns a cloned registry peer by node ID.
+func (s *Store) Peer(nodeID string) (RegistryNode, bool) {
+	if s == nil || nodeID == "" {
+		return RegistryNode{}, false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	peer, ok := s.peers[nodeID]
+	if !ok {
+		return RegistryNode{}, false
+	}
+	return cloneRegistryNode(peer), true
+}
+
 // UpsertSnapshot records the latest accepted presence snapshot for a node.
 func (s *Store) UpsertSnapshot(snapshot presence.Snapshot) {
 	if s == nil || snapshot.NodeID == "" {
