@@ -23,6 +23,9 @@ type Server struct {
 
 	snapshotProviderMu sync.RWMutex
 	snapshotProvider   presence.SnapshotProvider
+
+	globalReaderMu sync.RWMutex
+	globalReader   presence.GlobalReader
 }
 
 // PushEnvelope is the wire format for push messages, matching idchat's contract.
@@ -75,6 +78,21 @@ func (s *Server) presenceSnapshotProvider() presence.SnapshotProvider {
 	defer s.snapshotProviderMu.RUnlock()
 
 	return s.snapshotProvider
+}
+
+// SetGlobalReader configures the reader used for global presence list and stats.
+func (s *Server) SetGlobalReader(reader presence.GlobalReader) {
+	s.globalReaderMu.Lock()
+	defer s.globalReaderMu.Unlock()
+
+	s.globalReader = reader
+}
+
+func (s *Server) presenceGlobalReader() presence.GlobalReader {
+	s.globalReaderMu.RLock()
+	defer s.globalReaderMu.RUnlock()
+
+	return s.globalReader
 }
 
 // onConnection handles a new Socket.IO connection.
