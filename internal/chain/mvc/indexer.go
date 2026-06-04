@@ -1,7 +1,11 @@
 package mvc
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -105,16 +109,20 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 			}
 
 			address, ownerOutIdx, _ := idx.getPinOwner(tx)
-			pin.Id = fmt.Sprintf("%si%d", txHash, ownerOutIdx)
+			pinHash, err := mvcMetaIDTxHash(tx)
+			if err != nil {
+				pinHash = txHash
+			}
+			pin.Id = fmt.Sprintf("%si%d", pinHash, ownerOutIdx)
 			pin.ChainName = "mvc"
-			pin.GenesisTransaction = txHash
+			pin.GenesisTransaction = pinHash
 			pin.GenesisHeight = height
 			pin.Timestamp = timestamp
 			pin.Address = address
 			pin.CreateAddress = address
 			pin.MetaId = address
 			pin.GlobalMetaId = address
-			pin.Output = fmt.Sprintf("%s:%d", txHash, ownerOutIdx)
+			pin.Output = fmt.Sprintf("%s:%d", pinHash, ownerOutIdx)
 			_ = outIdx
 
 			pins = append(pins, pin)
@@ -232,6 +240,196 @@ func (idx *Indexer) getPinOwner(tx *wire.MsgTx) (address string, outIdx int, loc
 		}
 	}
 	return
+}
+
+func mvcMetaIDTxHash(tx *wire.MsgTx) (string, error) {
+	if tx == nil {
+		return "", errors.New("nil tx")
+	}
+	if tx.Version < 10 {
+		return tx.TxHash().String(), nil
+	}
+
+	var buf bytes.Buffer
+	if err := tx.Serialize(&buf); err != nil {
+		return "", err
+	}
+	parsed, err := parseMVCMetaIDRawTx(buf.Bytes())
+	if err != nil {
+		return "", err
+	}
+
+	var inputBytes, inputScriptHashes, outputBytes []byte
+	for _, in := range parsed.inputs {
+		inputBytes = append(inputBytes, in.txid...)
+		inputBytes = append(inputBytes, in.vout...)
+		inputBytes = append(inputBytes, in.sequence...)
+		inputScriptHashes = append(inputScriptHashes, sha256Bytes(in.scriptSig)...)
+	}
+	for _, out := range parsed.outputs {
+		outputBytes = append(outputBytes, out.amount...)
+		outputBytes = append(outputBytes, sha256Bytes(out.script)...)
+	}
+
+	var manRaw []byte
+	manRaw = append(manRaw, parsed.version...)
+	manRaw = append(manRaw, parsed.lockTime...)
+	manRaw = append(manRaw, uint32LittleEndian(uint32(len(parsed.inputs)))...)
+	manRaw = append(manRaw, uint32LittleEndian(uint32(len(parsed.outputs)))...)
+	manRaw = append(manRaw, sha256Bytes(inputBytes)...)
+	manRaw = append(manRaw, sha256Bytes(inputScriptHashes)...)
+	manRaw = append(manRaw, sha256Bytes(outputBytes)...)
+	return doubleSHA256ReversedHex(manRaw), nil
+}
+
+type mvcRawTx struct {
+	version  []byte
+	inputs   []mvcRawTxIn
+	outputs  []mvcRawTxOut
+	lockTime []byte
+}
+
+type mvcRawTxIn struct {
+	txid      []byte
+	vout      []byte
+	scriptSig []byte
+	sequence  []byte
+}
+
+type mvcRawTxOut struct {
+	amount []byte
+	script []byte
+}
+
+func parseMVCMetaIDRawTx(raw []byte) (*mvcRawTx, error) {
+	if len(raw) < 10 {
+		return nil, errors.New("invalid transaction data")
+	}
+
+	index := 0
+	parsed := &mvcRawTx{}
+	parsed.version = raw[index : index+4]
+	index += 4
+
+	inCount, n, err := decodeMVCVarInt(raw[index:])
+	if err != nil {
+		return nil, err
+	}
+	index += n
+	if inCount == 0 {
+		return nil, errors.New("invalid transaction data")
+	}
+
+	for i := 0; i < inCount; i++ {
+		if index+36 > len(raw) {
+			return nil, errors.New("invalid transaction data length")
+		}
+		in := mvcRawTxIn{
+			txid: raw[index : index+32],
+			vout: raw[index+32 : index+36],
+		}
+		index += 36
+
+		scriptLen, size, err := decodeMVCVarInt(raw[index:])
+		if err != nil {
+			return nil, err
+		}
+		index += size
+		if index+scriptLen+4 > len(raw) {
+			return nil, errors.New("invalid transaction data length")
+		}
+		in.scriptSig = raw[index : index+scriptLen]
+		index += scriptLen
+		in.sequence = raw[index : index+4]
+		index += 4
+		parsed.inputs = append(parsed.inputs, in)
+	}
+
+	outCount, n, err := decodeMVCVarInt(raw[index:])
+	if err != nil {
+		return nil, err
+	}
+	index += n
+	if outCount == 0 {
+		return nil, errors.New("invalid transaction data")
+	}
+
+	for i := 0; i < outCount; i++ {
+		if index+8 > len(raw) {
+			return nil, errors.New("invalid transaction data length")
+		}
+		out := mvcRawTxOut{amount: raw[index : index+8]}
+		index += 8
+
+		scriptLen, size, err := decodeMVCVarInt(raw[index:])
+		if err != nil {
+			return nil, err
+		}
+		index += size
+		if index+scriptLen > len(raw) {
+			return nil, errors.New("invalid transaction data length")
+		}
+		out.script = raw[index : index+scriptLen]
+		index += scriptLen
+		parsed.outputs = append(parsed.outputs, out)
+	}
+
+	if index+4 != len(raw) {
+		return nil, errors.New("invalid transaction data length")
+	}
+	parsed.lockTime = raw[index : index+4]
+	return parsed, nil
+}
+
+func decodeMVCVarInt(buf []byte) (int, int, error) {
+	if len(buf) == 0 {
+		return 0, 0, errors.New("invalid transaction data length")
+	}
+	switch buf[0] {
+	case 0xfd:
+		if len(buf) < 3 {
+			return 0, 0, errors.New("invalid transaction data length")
+		}
+		return int(binary.LittleEndian.Uint16(buf[1:3])), 3, nil
+	case 0xfe:
+		if len(buf) < 5 {
+			return 0, 0, errors.New("invalid transaction data length")
+		}
+		return int(binary.LittleEndian.Uint32(buf[1:5])), 5, nil
+	case 0xff:
+		if len(buf) < 9 {
+			return 0, 0, errors.New("invalid transaction data length")
+		}
+		value := binary.LittleEndian.Uint64(buf[1:9])
+		if value > uint64(^uint(0)>>1) {
+			return 0, 0, errors.New("varint too large")
+		}
+		return int(value), 9, nil
+	default:
+		return int(buf[0]), 1, nil
+	}
+}
+
+func uint32LittleEndian(v uint32) []byte {
+	out := make([]byte, 4)
+	binary.LittleEndian.PutUint32(out, v)
+	return out
+}
+
+func sha256Bytes(data []byte) []byte {
+	sum := sha256.Sum256(data)
+	return sum[:]
+}
+
+func doubleSHA256ReversedHex(data []byte) string {
+	first := sha256.Sum256(data)
+	second := sha256.Sum256(first[:])
+	out := make([]byte, len(second))
+	copy(out, second[:])
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return hex.EncodeToString(out)
 }
 
 // parseMetaIDWitness extracts MetaID fields from SegWit witness data.
