@@ -135,9 +135,10 @@ func (a *Aggregator) handlePrivateChat(pin *aggregator.PinInscription) (*aggrega
 	}
 
 	notifyEvent := &aggregator.NotifyEvent{
-		Type:    "WS_SERVER_NOTIFY_PRIVATE_CHAT",
-		MetaId:  toMetaId,
-		Payload: notifyPayload,
+		Type:      "WS_SERVER_NOTIFY_PRIVATE_CHAT",
+		MetaId:    toMetaId,
+		TargetIds: a.identityAliases(toMetaId),
+		Payload:   notifyPayload,
 	}
 
 	log.Printf("[privatechat] private message saved: pinId=%s from=%s to=%s", msg.PinId, fromMetaId, toMetaId)

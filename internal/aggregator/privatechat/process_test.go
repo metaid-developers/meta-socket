@@ -299,6 +299,55 @@ func TestPrivateChatList_ResolvesCanonicalPeerAlias(t *testing.T) {
 	}
 }
 
+func TestPrivateChatNotifyEventTargetsRecipientAliases(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+	agg.SetProfileLookup(&fakePrivateChatProfileLookup{
+		byGlobalMetaId: map[string]*IdentityProfile{
+			"idqBuyerGlobal": {
+				MetaId:       "buyer_local_meta",
+				GlobalMetaId: "idqBuyerGlobal",
+				Address:      "1BuyerAddress",
+			},
+		},
+	})
+
+	pin := &aggregator.PinInscription{
+		Id:            "alias_push:i0",
+		Path:          "/private/chat/simplemsg",
+		Operation:     "create",
+		CreateAddress: "1ProviderAddress",
+		CreateMetaId:  "provider_meta",
+		GlobalMetaId:  "idqProviderGlobal",
+		ChainName:     "mvc",
+		Timestamp:     1780562000,
+		GenesisHeight: 176100,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			From:        "provider_meta",
+			To:          "idqBuyerGlobal",
+			Content:     "alias route",
+			ContentType: "text/plain",
+			Encrypt:     "none",
+		}),
+	}
+
+	evt, err := agg.HandleBlockPin(pin)
+	if err != nil {
+		t.Fatalf("HandleBlockPin failed: %v", err)
+	}
+	if evt == nil {
+		t.Fatal("expected NotifyEvent")
+	}
+
+	want := []string{"idqBuyerGlobal", "buyer_local_meta", "1BuyerAddress"}
+	if !reflect.DeepEqual(evt.TargetIds, want) {
+		t.Fatalf("TargetIds = %#v, want %#v", evt.TargetIds, want)
+	}
+	if evt.MetaId != "idqBuyerGlobal" {
+		t.Fatalf("MetaId fallback = %q, want idqBuyerGlobal", evt.MetaId)
+	}
+}
+
 func TestCanonicalPrivateChatRoutesMirrorGroupChatCompatibilityRoutes(t *testing.T) {
 	agg, store, router := setupTestAggregator(t)
 	defer store.Close()
