@@ -12,13 +12,14 @@ import (
 
 // SimpleMsg is the JSON structure for /private/chat/simplemsg protocol.
 type SimpleMsg struct {
-	From        string   `json:"from"`
-	To          string   `json:"to"`
-	Content     string   `json:"content"`
-	ContentType string   `json:"contentType"`
-	Encrypt     string   `json:"encryption"`
-	ReplyPin    string   `json:"replyPin"`
-	Mention     []string `json:"mention"`
+	From         string   `json:"from"`
+	To           string   `json:"to"`
+	Content      string   `json:"content"`
+	ContentType  string   `json:"contentType"`
+	Encrypt      string   `json:"encryption"`
+	EncryptAlias string   `json:"encrypt"`
+	ReplyPin     string   `json:"replyPin"`
+	Mention      []string `json:"mention"`
 }
 
 // SimplePrivateBlock is the JSON structure for /private/block/simpleprivateblock protocol.
@@ -90,6 +91,9 @@ func (a *Aggregator) handlePrivateChat(pin *aggregator.PinInscription) (*aggrega
 	txId := extractTxId(pin.Id)
 
 	encryption := sm.Encrypt
+	if encryption == "" {
+		encryption = sm.EncryptAlias
+	}
 	contentType := sm.ContentType
 
 	msg := &PrivateMessage{
@@ -117,9 +121,9 @@ func (a *Aggregator) handlePrivateChat(pin *aggregator.PinInscription) (*aggrega
 
 	// Build notify event for socket push
 	notifyPayload := map[string]interface{}{
-		"type":        "WS_SERVER_NOTIFY_PRIVATE_CHAT",
-		"from":        fromMetaId,
-		"fromAddress": fromAddress,
+		"type":         "WS_SERVER_NOTIFY_PRIVATE_CHAT",
+		"from":         fromMetaId,
+		"fromAddress":  fromAddress,
 		"fromUserInfo": msg.FromUserInfo,
 		"to":           toMetaId,
 		"content":      sm.Content,

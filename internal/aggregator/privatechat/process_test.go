@@ -161,6 +161,51 @@ func TestPrivateMessagePersistence(t *testing.T) {
 		msg.From, msg.To, msg.Content, msg.TxId, msg.PinId)
 }
 
+func TestSimpleMsgEncryptAliasIsPersisted(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	pin := &aggregator.PinInscription{
+		Id:            "encrypt_alias:i0",
+		Path:          "/protocols/simplemsg",
+		Operation:     "create",
+		CreateAddress: "1AliceSender",
+		CreateMetaId:  "alice_encrypt",
+		GlobalMetaId:  "global_alice_encrypt",
+		ChainName:     "mvc",
+		Timestamp:     1700000000000,
+		ContentBody: []byte(`{
+			"to":"bob_encrypt",
+			"content":"U2FsdGVkX1encrypted",
+			"contentType":"text/plain",
+			"encrypt":"ecdh",
+			"replyPin":""
+		}`),
+	}
+
+	if _, err := agg.HandleBlockPin(pin); err != nil {
+		t.Fatalf("HandleBlockPin failed: %v", err)
+	}
+
+	w := performRequest(t, router, "GET",
+		"/api/private-chat/messages?metaId=alice_encrypt&otherMetaId=bob_encrypt&cursor=&size=20")
+	var resp struct {
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp.Code != 0 {
+		t.Fatalf("expected code=0, got %d: %s", resp.Code, w.Body.String())
+	}
+	if len(resp.Data.List) != 1 {
+		t.Fatalf("expected 1 message, got %d: %s", len(resp.Data.List), w.Body.String())
+	}
+	if resp.Data.List[0].Encryption != "ecdh" {
+		t.Fatalf("encryption: got %q want ecdh", resp.Data.List[0].Encryption)
+	}
+}
+
 func TestPrivateChatList_ReadsPersistedMessagesAfterRestart(t *testing.T) {
 	dataDir := t.TempDir()
 	store1 := storage.NewPebbleStore(dataDir)
@@ -190,7 +235,7 @@ func TestPrivateChatList_ReadsPersistedMessagesAfterRestart(t *testing.T) {
 		t.Fatalf("init restarted aggregator: %v", err)
 	}
 
-	got, err := agg2.GetPrivateChatList("idqBuyer", "1GrqProvider", "", 20)
+	got, err := agg2.GetPrivateChatList("idqBuyer", "1GrqProvider", "", 20, 0)
 	if err != nil {
 		t.Fatalf("GetPrivateChatList after restart: %v", err)
 	}
@@ -439,6 +484,52 @@ func TestBidirectionalPagination(t *testing.T) {
 
 	t.Logf("Bidirectional pagination OK: total=%d, %d pages, %d messages seen",
 		resp.Data.Total, page, seenCount)
+}
+
+func TestPrivateChatListTimestampPagination(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	for i, ts := range []int64{1000, 2000, 3000} {
+		pin := &aggregator.PinInscription{
+			Id:            fmt.Sprintf("timestamp_page_%d:i0", i),
+			Path:          "/private/chat/simplemsg",
+			Operation:     "create",
+			CreateAddress: "1AliceAddr",
+			CreateMetaId:  "alice_ts",
+			GlobalMetaId:  "global_alice_ts",
+			ChainName:     "mvc",
+			Timestamp:     ts,
+			ContentBody: mustMarshal(t, SimpleMsg{
+				From:        "alice_ts",
+				To:          "bob_ts",
+				Content:     fmt.Sprintf("message %d", ts),
+				ContentType: "text/plain",
+				Encrypt:     "none",
+			}),
+		}
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin %d failed: %v", i, err)
+		}
+	}
+
+	w := performRequest(t, router, "GET",
+		"/api/private-chat/messages?metaId=alice_ts&otherMetaId=bob_ts&timestamp=2000&size=20")
+	var resp struct {
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp.Code != 0 {
+		t.Fatalf("expected code=0, got %d: %s", resp.Code, w.Body.String())
+	}
+	if len(resp.Data.List) != 1 {
+		t.Fatalf("expected only messages older than timestamp, got %d: %s", len(resp.Data.List), w.Body.String())
+	}
+	if resp.Data.List[0].Content != "message 1000" {
+		t.Fatalf("content: got %q want message 1000", resp.Data.List[0].Content)
+	}
 }
 
 // --- AC4: Index-based query ---

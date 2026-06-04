@@ -46,12 +46,13 @@ func (a *Aggregator) handlePrivateChatList(c *gin.Context) {
 	}
 
 	cursor := c.DefaultQuery("cursor", "")
+	timestamp, _ := strconv.ParseInt(c.DefaultQuery("timestamp", "0"), 10, 64)
 	size, _ := strconv.ParseInt(c.DefaultQuery("size", "20"), 10, 64)
 	if size < 1 || size > 100 {
 		size = 20
 	}
 
-	result, err := a.GetPrivateChatList(metaId, otherMetaId, cursor, size)
+	result, err := a.GetPrivateChatList(metaId, otherMetaId, cursor, size, timestamp)
 	if err != nil {
 		api.RespErr(c, 1, "failed to get private chat list")
 		return

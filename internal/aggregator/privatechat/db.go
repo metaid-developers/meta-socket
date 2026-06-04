@@ -86,9 +86,19 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 
 // GetPrivateChatList returns bidirectionally filtered messages between two users
 // with cursor-based pagination (descending by timestamp, newest first).
-// The cursor is a base64-encoded offset.
-func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr string, size int64) (*PrivateChatListResult, error) {
+// The cursor is a base64-encoded offset. When beforeTimestamp is positive,
+// only messages older than that timestamp are considered.
+func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr string, size int64, beforeTimestamp int64) (*PrivateChatListResult, error) {
 	allMessages := a.collectPrivateMessages(myMetaId, otherMetaId)
+	if beforeTimestamp > 0 {
+		filtered := make([]*PrivateMessage, 0, len(allMessages))
+		for _, msg := range allMessages {
+			if msg.Timestamp < beforeTimestamp {
+				filtered = append(filtered, msg)
+			}
+		}
+		allMessages = filtered
+	}
 
 	total := int64(len(allMessages))
 
