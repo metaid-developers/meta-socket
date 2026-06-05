@@ -398,8 +398,8 @@ func TestPrivateChatNotifyPayloadUsesCanonicalMessageShape(t *testing.T) {
 	if payload.BlockHeight != 176101 {
 		t.Fatalf("BlockHeight = %d, want 176101", payload.BlockHeight)
 	}
-	if payload.Index != -1 {
-		t.Fatalf("Index = %d, want -1", payload.Index)
+	if payload.Index != 0 {
+		t.Fatalf("Index = %d, want 0", payload.Index)
 	}
 	if payload.ContentType != "text/markdown" || payload.Encryption != "ecdh" {
 		t.Fatalf("ContentType/Encryption = %q/%q, want text/markdown/ecdh", payload.ContentType, payload.Encryption)
@@ -667,7 +667,7 @@ func TestPrivateChatListByIndex(t *testing.T) {
 		agg.HandleBlockPin(pin)
 	}
 
-	// Query by index: startIndex=0, size=20 (should return latest 20)
+	// Query by index: startIndex=0, size=20 (idchat expects ascending message indexes 0..19)
 	w := performRequest(t, router, "GET",
 		"/api/group-chat/private-chat-list-by-index?metaId=alice_idx&otherMetaId=bob_idx&startIndex=0&size=20")
 	var resp struct {
@@ -682,12 +682,14 @@ func TestPrivateChatListByIndex(t *testing.T) {
 	if len(resp.Data.List) != 20 {
 		t.Errorf("expected 20 messages, got %d", len(resp.Data.List))
 	}
-	// Latest message (newest first)
-	if resp.Data.List[0].Content != "IndexMessage 49" {
-		t.Errorf("expected 'IndexMessage 49' as first, got %q", resp.Data.List[0].Content)
+	if resp.Data.NextTimestamp != 19 {
+		t.Errorf("expected nextTimestamp(last index)=19, got %d", resp.Data.NextTimestamp)
 	}
-	if resp.Data.List[19].Content != "IndexMessage 30" {
-		t.Errorf("expected 'IndexMessage 30' as 20th, got %q", resp.Data.List[19].Content)
+	if resp.Data.List[0].Content != "IndexMessage 0" || resp.Data.List[0].Index != 0 {
+		t.Errorf("expected index 0 as first, got content=%q index=%d", resp.Data.List[0].Content, resp.Data.List[0].Index)
+	}
+	if resp.Data.List[19].Content != "IndexMessage 19" || resp.Data.List[19].Index != 19 {
+		t.Errorf("expected index 19 as 20th, got content=%q index=%d", resp.Data.List[19].Content, resp.Data.List[19].Index)
 	}
 
 	// Query next page: startIndex=20, size=20
@@ -702,8 +704,11 @@ func TestPrivateChatListByIndex(t *testing.T) {
 	if len(resp2.Data.List) != 20 {
 		t.Errorf("page 2: expected 20 messages, got %d", len(resp2.Data.List))
 	}
-	if resp2.Data.List[0].Content != "IndexMessage 29" {
-		t.Errorf("page 2 first: expected 'IndexMessage 29', got %q", resp2.Data.List[0].Content)
+	if resp2.Data.NextTimestamp != 39 {
+		t.Errorf("page 2: expected nextTimestamp(last index)=39, got %d", resp2.Data.NextTimestamp)
+	}
+	if resp2.Data.List[0].Content != "IndexMessage 20" || resp2.Data.List[0].Index != 20 {
+		t.Errorf("page 2 first: expected index 20, got content=%q index=%d", resp2.Data.List[0].Content, resp2.Data.List[0].Index)
 	}
 
 	t.Logf("Index query OK: page1=%d msgs, page2=%d msgs",

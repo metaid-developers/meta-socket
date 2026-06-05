@@ -96,6 +96,15 @@ func postJSON(t *testing.T, router *gin.Engine, path string, body string) (*http
 	return w, decoded
 }
 
+func mustMarshalJSON(t *testing.T, value interface{}) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return raw
+}
+
 func assertResponseDataKeys(t *testing.T, body map[string]interface{}, keys ...string) map[string]interface{} {
 	t.Helper()
 
@@ -591,6 +600,241 @@ func TestRouter_IDChatLatestChatInfoListIncludesPrivateSessions(t *testing.T) {
 	}
 	if userInfo["chatPublicKey"] != "pub-b" {
 		t.Fatalf("private userInfo.chatPublicKey: want pub-b got %v userInfo=%v", userInfo["chatPublicKey"], userInfo)
+	}
+}
+
+func TestRouter_IDChatLatestChatInfoListHydratesPrivateUserInfoFromProfiles(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+
+	peerProfile := map[string]interface{}{
+		"metaid":       "user-b",
+		"globalMetaId": "global-b",
+		"address":      "addr-b",
+		"name":         "User B",
+		"avatar":       "avatar-b",
+		"chatpubkey":   "pub-b-from-profile",
+		"chatpubkeyId": "pub-b-pin",
+	}
+	rawProfile, _ := json.Marshal(peerProfile)
+	if err := fixture.store.Set("userinfo", []byte("profile:user-b"), rawProfile); err != nil {
+		t.Fatalf("seed userinfo profile: %v", err)
+	}
+
+	if err := fixture.privateAgg.SavePrivateMessage(&privatechat.PrivateMessage{
+		FromGlobalMetaId: "global-b",
+		From:             "user-b",
+		FromAddress:      "addr-b",
+		ToGlobalMetaId:   "global-a",
+		To:               "user-a",
+		ToAddress:        "addr-a",
+		TxId:             "tx-private-profile",
+		PinId:            "tx-private-profilei0",
+		Protocol:         "/protocols/simplemsg",
+		Content:          "private message without embedded user info",
+		ContentType:      "text/plain",
+		Timestamp:        2000,
+		Chain:            "mvc",
+		BlockHeight:      12,
+		Index:            2,
+	}); err != nil {
+		t.Fatalf("save private message: %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/chat-api/group-chat/user/latest-chat-info-list?metaId=user-a")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data := assertResponseDataKeys(t, body, "total", "list")
+	list, ok := data["list"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("list: want one item got %T %v body=%s", data["list"], data["list"], w.Body.String())
+	}
+	privateItem, ok := list[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("first list item should be object: %T %v", list[0], list[0])
+	}
+	userInfo, ok := privateItem["userInfo"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("private item should hydrate userInfo from profile, got %T %v", privateItem["userInfo"], privateItem["userInfo"])
+	}
+	if userInfo["chatPublicKey"] != "pub-b-from-profile" || userInfo["chatPublicKeyId"] != "pub-b-pin" {
+		t.Fatalf("private userInfo chat key mismatch: %v", userInfo)
+	}
+}
+
+func TestRouter_IDChatGroupInfoAndListReturnOldRoomFields(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+
+	createPin := &aggregator.PinInscription{
+		Id:            "compatgrouptxi0",
+		Path:          "/protocols/simplegroupcreate",
+		Operation:     "create",
+		CreateAddress: "addr-creator",
+		CreateMetaId:  "creator-meta",
+		GlobalMetaId:  "creator-global",
+		ChainName:     "mvc",
+		Timestamp:     1000,
+		GenesisHeight: 10,
+		ContentBody: mustMarshalJSON(t, map[string]interface{}{
+			"groupId":   "compat-group",
+			"groupName": "Compatibility Room",
+			"groupIcon": "room-avatar",
+			"groupNote": "room note",
+			"type":      "100",
+		}),
+	}
+	if _, err := fixture.groupAgg.HandleBlockPin(createPin); err != nil {
+		t.Fatalf("HandleBlockPin(group create): %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/chat-api/group-chat/group-info?groupId=compat-group")
+	if w.Code != http.StatusOK {
+		t.Fatalf("group-info: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	info := assertResponseDataKeys(t, body, "groupId", "txId", "pinId", "roomName", "roomAvatarUrl", "roomJoinType", "createUserMetaId", "createUserGlobalMetaId", "createUserAddress", "userCount")
+	if info["roomName"] != "Compatibility Room" || info["roomAvatarUrl"] != "room-avatar" || info["roomJoinType"] != "100" {
+		t.Fatalf("group-info old room fields mismatch: %v", info)
+	}
+	if info["txId"] != "compatgrouptx" || info["pinId"] != createPin.Id {
+		t.Fatalf("group-info tx/pin mismatch: %v", info)
+	}
+
+	w, body = get(t, fixture.router, "/chat-api/group-chat/group-list?metaId=creator-global")
+	if w.Code != http.StatusOK {
+		t.Fatalf("group-list: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data := assertResponseDataKeys(t, body, "total", "list")
+	list, ok := data["list"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("group-list: want one item got %T %v body=%s", data["list"], data["list"], w.Body.String())
+	}
+	item, ok := list[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("group-list item should be object: %T %v", list[0], list[0])
+	}
+	for _, key := range []string{"roomName", "roomAvatarUrl", "txId", "pinId", "createUserMetaId", "createUserGlobalMetaId", "createUserAddress", "userCount"} {
+		if _, ok := item[key]; !ok {
+			t.Fatalf("group-list item missing %s: %v", key, item)
+		}
+	}
+	if item["roomName"] != "Compatibility Room" || item["txId"] != "compatgrouptx" {
+		t.Fatalf("group-list old fields mismatch: %v", item)
+	}
+}
+
+func TestRouter_IDChatChannelHistoryAcceptsChannelIDOnlyAndTimestamp(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+
+	if err := fixture.groupAgg.SaveChatMessage(&groupchat.ChatMessage{
+		TxId:         "sub-old",
+		PinId:        "sub-oldi0",
+		GroupId:      "parent-group",
+		ChannelId:    "sub-channel",
+		MetaId:       "user-a",
+		GlobalMetaId: "global-a",
+		Protocol:     "/protocols/simplegroupchat",
+		Content:      "old sub message",
+		ContentType:  "text/plain",
+		ChatType:     "msg",
+		Timestamp:    1000,
+		Chain:        "mvc",
+		BlockHeight:  10,
+		Index:        0,
+	}); err != nil {
+		t.Fatalf("save old message: %v", err)
+	}
+	if err := fixture.groupAgg.SaveChatMessage(&groupchat.ChatMessage{
+		TxId:         "sub-new",
+		PinId:        "sub-newi0",
+		GroupId:      "parent-group",
+		ChannelId:    "sub-channel",
+		MetaId:       "user-a",
+		GlobalMetaId: "global-a",
+		Protocol:     "/protocols/simplegroupchat",
+		Content:      "new sub message",
+		ContentType:  "text/plain",
+		ChatType:     "msg",
+		Timestamp:    2000,
+		Chain:        "mvc",
+		BlockHeight:  20,
+		Index:        1,
+	}); err != nil {
+		t.Fatalf("save new message: %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/chat-api/group-chat/channel-chat-list-v3?channelId=sub-channel&timestamp=0&size=20")
+	if w.Code != http.StatusOK {
+		t.Fatalf("channel-chat-list-v3 channelId-only: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data := assertResponseDataKeys(t, body, "total", "nextTimestamp", "list")
+	list, ok := data["list"].([]interface{})
+	if !ok || len(list) != 2 {
+		t.Fatalf("timestamp=0 list: want two items got %T %v body=%s", data["list"], data["list"], w.Body.String())
+	}
+	first := list[0].(map[string]interface{})
+	if first["content"] != "new sub message" {
+		t.Fatalf("timestamp=0 should return newest first, got %v", first)
+	}
+
+	w, body = get(t, fixture.router, "/chat-api/group-chat/channel-chat-list-v3?channelId=sub-channel&timestamp=1500&size=20")
+	if w.Code != http.StatusOK {
+		t.Fatalf("channel-chat-list-v3 timestamp: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data = assertResponseDataKeys(t, body, "total", "nextTimestamp", "list")
+	list, ok = data["list"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("timestamp=1500 list: want one older item got %T %v body=%s", data["list"], data["list"], w.Body.String())
+	}
+	older := list[0].(map[string]interface{})
+	if older["content"] != "old sub message" {
+		t.Fatalf("timestamp=1500 should return older message, got %v", older)
+	}
+
+	w, body = get(t, fixture.router, "/chat-api/group-chat/channel-chat-list-by-index?channelId=sub-channel&startIndex=0&size=20")
+	if w.Code != http.StatusOK {
+		t.Fatalf("channel-chat-list-by-index channelId-only: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data = assertResponseDataKeys(t, body, "total", "lastIndex", "list")
+	if data["total"] != float64(2) {
+		t.Fatalf("by-index total mismatch: %v body=%s", data["total"], w.Body.String())
+	}
+	if data["lastIndex"] != float64(1) {
+		t.Fatalf("by-index lastIndex should be the max message index, got %v body=%s", data["lastIndex"], w.Body.String())
+	}
+	list, ok = data["list"].([]interface{})
+	if !ok || len(list) != 2 {
+		t.Fatalf("by-index list: want two items got %T %v body=%s", data["list"], data["list"], w.Body.String())
+	}
+	first = list[0].(map[string]interface{})
+	if first["content"] != "old sub message" || first["index"] != float64(0) {
+		t.Fatalf("by-index should return ascending continuous index order, got %v", first)
+	}
+}
+
+func TestRouter_IDChatGroupHistoryHonorsTimestamp(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+
+	for _, msg := range []*groupchat.ChatMessage{
+		{TxId: "g-old", PinId: "g-oldi0", GroupId: "group-history", MetaId: "user-a", GlobalMetaId: "global-a", Protocol: "/protocols/simplegroupchat", Content: "old group message", ContentType: "text/plain", ChatType: "msg", Timestamp: 1000, Chain: "mvc", BlockHeight: 10, Index: 0},
+		{TxId: "g-new", PinId: "g-newi0", GroupId: "group-history", MetaId: "user-a", GlobalMetaId: "global-a", Protocol: "/protocols/simplegroupchat", Content: "new group message", ContentType: "text/plain", ChatType: "msg", Timestamp: 2000, Chain: "mvc", BlockHeight: 20, Index: 1},
+	} {
+		if err := fixture.groupAgg.SaveChatMessage(msg); err != nil {
+			t.Fatalf("save group message: %v", err)
+		}
+	}
+
+	w, body := get(t, fixture.router, "/chat-api/group-chat/group-chat-list-v2?groupId=group-history&timestamp=1500&size=20")
+	if w.Code != http.StatusOK {
+		t.Fatalf("group-chat-list-v2 timestamp: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data := assertResponseDataKeys(t, body, "total", "nextTimestamp", "list")
+	list, ok := data["list"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("timestamp=1500 list: want one older item got %T %v body=%s", data["list"], data["list"], w.Body.String())
+	}
+	item := list[0].(map[string]interface{})
+	if item["content"] != "old group message" {
+		t.Fatalf("timestamp=1500 should return older message, got %v", item)
 	}
 }
 

@@ -274,3 +274,81 @@ func protocolInt64Value(value interface{}, defaultValue int64) int64 {
 	}
 	return defaultValue
 }
+
+func (a *Aggregator) groupCompatDTO(group *Group) map[string]interface{} {
+	if group == nil {
+		return map[string]interface{}{}
+	}
+
+	txId := group.TxId
+	if txId == "" && group.PinId != "" {
+		txId = extractTxId(group.PinId)
+	}
+	if txId == "" {
+		txId = extractTxId(group.GroupId)
+	}
+
+	pinId := group.PinId
+	if pinId == "" {
+		pinId = group.GroupId
+	}
+
+	roomJoinType := group.JoinType
+	if roomJoinType == "" {
+		roomJoinType = group.GroupType
+	}
+
+	item := map[string]interface{}{
+		"communityId":            group.CommunityId,
+		"groupId":                group.GroupId,
+		"groupName":              group.GroupName,
+		"groupNote":              group.GroupNote,
+		"groupType":              group.GroupType,
+		"status":                 group.Status,
+		"avatar":                 group.Avatar,
+		"creator":                group.Creator,
+		"creatorMetaId":          group.CreatorMetaId,
+		"creatorGlobalMetaId":    group.CreatorGlobalMetaId,
+		"memberCount":            group.MemberCount,
+		"joinType":               group.JoinType,
+		"createdAt":              group.CreatedAt,
+		"chain":                  group.Chain,
+		"blockHeight":            group.BlockHeight,
+		"txId":                   txId,
+		"pinId":                  pinId,
+		"roomName":               group.GroupName,
+		"roomNote":               group.GroupNote,
+		"roomIcon":               group.Avatar,
+		"roomAvatarUrl":          group.Avatar,
+		"roomType":               group.GroupType,
+		"roomStatus":             group.Status,
+		"roomJoinType":           roomJoinType,
+		"createUserMetaId":       group.CreatorMetaId,
+		"createUserGlobalMetaId": group.CreatorGlobalMetaId,
+		"createUserAddress":      group.Creator,
+		"userCount":              group.MemberCount,
+		"timestamp":              group.CreatedAt,
+	}
+
+	if latest := latestMessageByTimestamp(a.collectGroupRootMessages(group.GroupId)); latest != nil {
+		item["roomNewestTxId"] = latest.TxId
+		item["roomNewestPinId"] = latest.PinId
+		item["roomNewestProtocol"] = latest.Protocol
+		item["roomNewestContent"] = latest.Content
+		item["roomNewestTimestamp"] = latest.Timestamp
+		item["roomNewestMetaId"] = latest.MetaId
+		item["roomNewestGlobalMetaId"] = latest.GlobalMetaId
+		item["index"] = latest.Index
+		item["lastMessage"] = latest
+	}
+
+	return item
+}
+
+func (a *Aggregator) groupCompatDTOs(groups []*Group) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(groups))
+	for _, group := range groups {
+		result = append(result, a.groupCompatDTO(group))
+	}
+	return result
+}

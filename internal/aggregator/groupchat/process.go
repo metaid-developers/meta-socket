@@ -170,17 +170,23 @@ func (a *Aggregator) handleGroupCreate(pin *aggregator.PinInscription) (*aggrega
 	}
 
 	group := &Group{
-		GroupId:       groupId,
-		GroupName:     sgc.GroupName,
-		Avatar:        sgc.GroupIcon,
-		Creator:       pin.CreateAddress,
-		CreatorMetaId: metaId,
-		MemberCount:   1,
-		CommunityId:   sgc.CommunityId,
-		JoinType:      firstProtocolString(sgc.JoinType, sgc.Type),
-		CreatedAt:     pin.Timestamp,
-		Chain:         pin.ChainName,
-		BlockHeight:   pin.GenesisHeight,
+		GroupId:             groupId,
+		TxId:                extractTxId(pin.Id),
+		PinId:               pin.Id,
+		GroupName:           sgc.GroupName,
+		GroupNote:           sgc.GroupNote,
+		GroupType:           firstProtocolString(sgc.GroupType, sgc.Type),
+		Status:              sgc.Status,
+		Avatar:              sgc.GroupIcon,
+		Creator:             pin.CreateAddress,
+		CreatorMetaId:       metaId,
+		CreatorGlobalMetaId: pin.GlobalMetaId,
+		MemberCount:         1,
+		CommunityId:         sgc.CommunityId,
+		JoinType:            firstProtocolString(sgc.JoinType, sgc.Type),
+		CreatedAt:           pin.Timestamp,
+		Chain:               pin.ChainName,
+		BlockHeight:         pin.GenesisHeight,
 	}
 
 	if err := a.SaveGroup(group); err != nil {

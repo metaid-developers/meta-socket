@@ -123,7 +123,7 @@ func (a *Aggregator) handleGroupInfo(c *gin.Context) {
 		return
 	}
 
-	api.RespSuccess(c, group)
+	api.RespSuccess(c, a.groupCompatDTO(group))
 }
 
 func (a *Aggregator) handleGroupPerson(c *gin.Context) {
@@ -288,12 +288,8 @@ func (a *Aggregator) handleGroupList(c *gin.Context) {
 		return
 	}
 
-	if groups == nil {
-		groups = []*Group{}
-	}
-
 	api.RespSuccess(c, gin.H{
-		"list":       groups,
+		"list":       a.groupCompatDTOs(groups),
 		"nextCursor": nextCursorVal,
 		"total":      total,
 	})
@@ -329,12 +325,13 @@ func (a *Aggregator) handleGroupChatListV2(c *gin.Context) {
 	}
 
 	cursor := c.DefaultQuery("cursor", "")
+	timestamp, _ := strconv.ParseInt(c.DefaultQuery("timestamp", "0"), 10, 64)
 	size, _ := strconv.ParseInt(c.DefaultQuery("size", "20"), 10, 64)
 	if size < 1 || size > 100 {
 		size = 20
 	}
 
-	result, err := a.GetChatListV2(groupId, cursor, size)
+	result, err := a.GetChatListV2BeforeTimestamp(groupId, cursor, size, timestamp)
 	if err != nil {
 		api.RespErr(c, 1, "failed to get chat list")
 		return
@@ -372,18 +369,19 @@ func (a *Aggregator) handleGroupChatListByIndex(c *gin.Context) {
 func (a *Aggregator) handleChannelChatListV3(c *gin.Context) {
 	groupId := c.Query("groupId")
 	channelId := c.Query("channelId")
-	if groupId == "" || channelId == "" {
-		api.RespErr(c, 1, "groupId and channelId are required")
+	if channelId == "" {
+		api.RespErr(c, 1, "channelId is required")
 		return
 	}
 
 	cursor := c.DefaultQuery("cursor", "")
+	timestamp, _ := strconv.ParseInt(c.DefaultQuery("timestamp", "0"), 10, 64)
 	size, _ := strconv.ParseInt(c.DefaultQuery("size", "20"), 10, 64)
 	if size < 1 || size > 100 {
 		size = 20
 	}
 
-	result, err := a.GetChannelChatListV3(groupId, channelId, cursor, size)
+	result, err := a.GetChannelChatListV3(groupId, channelId, cursor, size, timestamp)
 	if err != nil {
 		api.RespErr(c, 1, "failed to get channel chat list")
 		return
@@ -395,8 +393,8 @@ func (a *Aggregator) handleChannelChatListV3(c *gin.Context) {
 func (a *Aggregator) handleChannelChatListByIndex(c *gin.Context) {
 	groupId := c.Query("groupId")
 	channelId := c.Query("channelId")
-	if groupId == "" || channelId == "" {
-		api.RespErr(c, 1, "groupId and channelId are required")
+	if channelId == "" {
+		api.RespErr(c, 1, "channelId is required")
 		return
 	}
 

@@ -11,17 +11,23 @@ import (
 
 // Group represents a group chat room.
 type Group struct {
-	GroupId       string `json:"groupId"`
-	GroupName     string `json:"groupName"`
-	Avatar        string `json:"avatar,omitempty"`
-	Creator       string `json:"creator"`
-	CreatorMetaId string `json:"creatorMetaId"`
-	MemberCount   int64  `json:"memberCount"`
-	CommunityId   string `json:"communityId,omitempty"`
-	JoinType      string `json:"joinType,omitempty"`
-	CreatedAt     int64  `json:"createdAt"`
-	Chain         string `json:"chain,omitempty"`
-	BlockHeight   int64  `json:"blockHeight"`
+	GroupId             string `json:"groupId"`
+	TxId                string `json:"txId,omitempty"`
+	PinId               string `json:"pinId,omitempty"`
+	GroupName           string `json:"groupName"`
+	GroupNote           string `json:"groupNote,omitempty"`
+	GroupType           string `json:"groupType,omitempty"`
+	Status              string `json:"status,omitempty"`
+	Avatar              string `json:"avatar,omitempty"`
+	Creator             string `json:"creator"`
+	CreatorMetaId       string `json:"creatorMetaId"`
+	CreatorGlobalMetaId string `json:"creatorGlobalMetaId,omitempty"`
+	MemberCount         int64  `json:"memberCount"`
+	CommunityId         string `json:"communityId,omitempty"`
+	JoinType            string `json:"joinType,omitempty"`
+	CreatedAt           int64  `json:"createdAt"`
+	Chain               string `json:"chain,omitempty"`
+	BlockHeight         int64  `json:"blockHeight"`
 }
 
 // GroupMember represents a member of a group.

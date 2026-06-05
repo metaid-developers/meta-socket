@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -124,6 +125,12 @@ func chatKeyPrefix(groupId string) []byte {
 
 // SaveChatMessage persists a chat message to PebbleDB.
 func (a *Aggregator) SaveChatMessage(msg *ChatMessage) error {
+	if msg == nil {
+		return nil
+	}
+	if msg.Index < 0 {
+		msg.Index = a.nextChatIndex(msg.GroupId, msg.ChannelId)
+	}
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -134,67 +141,12 @@ func (a *Aggregator) SaveChatMessage(msg *ChatMessage) error {
 // GetChatListV2 returns chat messages for a group with cursor-based pagination (descending by timestamp).
 // The cursor is a base64-encoded index offset. Decode → skip entries → return nextCursor.
 func (a *Aggregator) GetChatListV2(groupId string, cursorStr string, size int64) (*ChatListResult, error) {
-	prefix := chatKeyPrefix(groupId)
+	return a.GetChatListV2BeforeTimestamp(groupId, cursorStr, size, 0)
+}
 
-	// Collect all messages in ascending order (oldest first by key)
-	var allMessages []*ChatMessage
-	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
-		var msg ChatMessage
-		if e := json.Unmarshal(value, &msg); e != nil {
-			return nil
-		}
-		allMessages = append(allMessages, &msg)
-		return nil
-	})
-
-	total := int64(len(allMessages))
-
-	// Determine start position. Messages are in ascending order (oldest first).
-	// We want descending (newest first), so we start from the end.
-	// cursor encodes how many entries we've already returned.
-	var startFromEnd int64 // offset from the end (0 = newest)
-	if cursorStr != "" && cursorStr != "null" {
-		decoded, cursorErr := base64.StdEncoding.DecodeString(cursorStr)
-		if cursorErr == nil && len(decoded) >= 8 {
-			startFromEnd = int64FromBytes(decoded[:8])
-		}
-	}
-
-	// Take `size` entries starting from position (total - 1 - startFromEnd) going backwards.
-	startIdx := total - 1 - startFromEnd
-	if startIdx >= total {
-		startIdx = total - 1
-	}
-	if startIdx < 0 {
-		startIdx = -1 // will produce no results
-	}
-
-	var messages []*ChatMessage
-	for i := startIdx; i >= 0 && int64(len(messages)) < size; i-- {
-		messages = append(messages, allMessages[i])
-	}
-	if messages == nil {
-		messages = []*ChatMessage{}
-	}
-
-	// Calculate next cursor
-	nextCursor := ""
-	newOffset := startFromEnd + int64(len(messages))
-	if newOffset < total && int64(len(messages)) == size && len(messages) > 0 {
-		nextCursor = base64.StdEncoding.EncodeToString(int64ToBytes(newOffset))
-	}
-
-	nextTimestamp := int64(0)
-	if len(messages) > 0 {
-		nextTimestamp = messages[len(messages)-1].Timestamp
-	}
-
-	return &ChatListResult{
-		Total:         total,
-		NextCursor:    nextCursor,
-		NextTimestamp: nextTimestamp,
-		List:          messages,
-	}, nil
+func (a *Aggregator) GetChatListV2BeforeTimestamp(groupId string, cursorStr string, size int64, beforeTimestamp int64) (*ChatListResult, error) {
+	allMessages := filterMessagesBeforeTimestamp(a.collectGroupRootMessages(groupId), beforeTimestamp)
+	return paginateMessagesDesc(allMessages, cursorStr, size), nil
 }
 
 // int64FromBytes converts 8 bytes to int64.
@@ -206,92 +158,38 @@ func int64FromBytes(b []byte) int64 {
 	return v
 }
 
-// GetChatListByIndex returns chat messages by startIndex (descending by timestamp).
+// GetChatListByIndex returns chat messages by their continuous message index.
 func (a *Aggregator) GetChatListByIndex(groupId string, startIndex int64, size int64) (*ChatListResult, error) {
-	prefix := chatKeyPrefix(groupId)
-
-	// Collect all messages first
-	var allMessages []*ChatMessage
-	var total int64
-
-	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
-		total++
-		var msg ChatMessage
-		if e := json.Unmarshal(value, &msg); e != nil {
-			return nil
-		}
-		allMessages = append(allMessages, &msg)
-		return nil
-	})
-
-	// Reverse for descending order (newest first)
-	reversed := make([]*ChatMessage, len(allMessages))
-	for i, msg := range allMessages {
-		reversed[len(allMessages)-1-i] = msg
-	}
-
-	// Apply startIndex and size
-	var messages []*ChatMessage
-	for i := startIndex; i < total && int64(len(messages)) < size; i++ {
-		messages = append(messages, reversed[i])
-	}
-	if messages == nil {
-		messages = []*ChatMessage{}
-	}
-
-	nextTimestamp := int64(0)
-	if len(messages) > 0 {
-		nextTimestamp = messages[len(messages)-1].Timestamp
-	}
-
+	messages, lastIndex := sliceMessagesByIndex(a.collectGroupRootMessages(groupId), startIndex, size)
 	return &ChatListResult{
-		Total:         total,
-		NextTimestamp: nextTimestamp,
+		Total:         int64(len(messages)),
+		NextTimestamp: lastIndex,
 		List:          messages,
 	}, nil
 }
 
 func (a *Aggregator) GetChatListByIndexCompat(groupId string, startIndex int64, size int64) (*ChatListByIndexResult, error) {
-	result, err := a.GetChatListByIndex(groupId, startIndex, size)
-	if err != nil {
-		return nil, err
-	}
-	lastIndex := startIndex + int64(len(result.List))
+	messages, lastIndex := sliceMessagesByIndex(a.collectGroupRootMessages(groupId), startIndex, size)
 	return &ChatListByIndexResult{
-		Total:         result.Total,
+		Total:         int64(len(messages)),
 		LastIndex:     lastIndex,
-		NextTimestamp: result.NextTimestamp,
-		List:          result.List,
+		NextTimestamp: lastIndex,
+		List:          messages,
 	}, nil
 }
 
-func (a *Aggregator) GetChannelChatListV3(groupId, channelId, cursorStr string, size int64) (*ChatListResult, error) {
-	allMessages := filterMessagesByChannel(a.collectGroupMessages(groupId), channelId)
+func (a *Aggregator) GetChannelChatListV3(groupId, channelId, cursorStr string, size int64, beforeTimestamp int64) (*ChatListResult, error) {
+	allMessages := filterMessagesBeforeTimestamp(a.collectChannelMessages(groupId, channelId), beforeTimestamp)
 	result := paginateMessagesDesc(allMessages, cursorStr, size)
 	return result, nil
 }
 
 func (a *Aggregator) GetChannelChatListByIndex(groupId, channelId string, startIndex int64, size int64) (*ChatListByIndexResult, error) {
-	allMessages := filterMessagesByChannel(a.collectGroupMessages(groupId), channelId)
-	total := int64(len(allMessages))
-	reversed := reverseMessages(allMessages)
-	var messages []*ChatMessage
-	for i := startIndex; i < total && int64(len(messages)) < size; i++ {
-		messages = append(messages, reversed[i])
-	}
-	if messages == nil {
-		messages = []*ChatMessage{}
-	}
-
-	nextTimestamp := int64(0)
-	if len(messages) > 0 {
-		nextTimestamp = messages[len(messages)-1].Timestamp
-	}
-
+	messages, lastIndex := sliceMessagesByIndex(a.collectChannelMessages(groupId, channelId), startIndex, size)
 	return &ChatListByIndexResult{
-		Total:         total,
-		LastIndex:     startIndex + int64(len(messages)),
-		NextTimestamp: nextTimestamp,
+		Total:         int64(len(messages)),
+		LastIndex:     lastIndex,
+		NextTimestamp: lastIndex,
 		List:          messages,
 	}, nil
 }
@@ -466,26 +364,22 @@ func (a *Aggregator) GetUserLatestChatInfoList(metaId string) ([]*UserLatestChat
 			return nil
 		}
 
-		// Get the latest message for this group
-		var latest *ChatMessage
-		chatResult, err := a.GetChatListByIndex(groupId, 0, 1)
-		if err == nil && len(chatResult.List) > 0 {
-			latest = chatResult.List[0]
-		}
+		latest := latestMessageByTimestamp(a.collectGroupRootMessages(groupId))
 
 		info := &UserLatestChatInfo{
-			Type:          "1",
-			GroupId:       groupId,
-			Timestamp:     group.CreatedAt,
-			CreateMetaId:  group.CreatorMetaId,
-			CreateAddress: group.Creator,
-			RoomName:      group.GroupName,
-			RoomJoinType:  group.JoinType,
-			RoomAvatarUrl: group.Avatar,
-			UserCount:     group.MemberCount,
-			Chain:         group.Chain,
-			BlockHeight:   group.BlockHeight,
-			LastMessage:   latest,
+			Type:               "1",
+			GroupId:            groupId,
+			Timestamp:          group.CreatedAt,
+			CreateMetaId:       group.CreatorMetaId,
+			CreateGlobalMetaId: group.CreatorGlobalMetaId,
+			CreateAddress:      group.Creator,
+			RoomName:           group.GroupName,
+			RoomJoinType:       group.JoinType,
+			RoomAvatarUrl:      group.Avatar,
+			UserCount:          group.MemberCount,
+			Chain:              group.Chain,
+			BlockHeight:        group.BlockHeight,
+			LastMessage:        latest,
 		}
 		if latest != nil {
 			info.Timestamp = latest.Timestamp
@@ -532,10 +426,66 @@ func (a *Aggregator) collectGroupMessages(groupId string) []*ChatMessage {
 	return messages
 }
 
+func (a *Aggregator) collectAllChatMessages() []*ChatMessage {
+	var messages []*ChatMessage
+	a.store.ScanPrefix(namespace, []byte(chatPrefix), func(key, value []byte) error {
+		var msg ChatMessage
+		if e := json.Unmarshal(value, &msg); e != nil {
+			return nil
+		}
+		messages = append(messages, &msg)
+		return nil
+	})
+	sortChatMessagesAscending(messages)
+	if messages == nil {
+		messages = []*ChatMessage{}
+	}
+	return messages
+}
+
+func (a *Aggregator) collectGroupRootMessages(groupId string) []*ChatMessage {
+	var messages []*ChatMessage
+	for _, msg := range a.collectGroupMessages(groupId) {
+		if msg.ChannelId == "" {
+			messages = append(messages, msg)
+		}
+	}
+	if messages == nil {
+		messages = []*ChatMessage{}
+	}
+	return messages
+}
+
+func (a *Aggregator) collectChannelMessages(groupId, channelId string) []*ChatMessage {
+	var source []*ChatMessage
+	if groupId != "" {
+		source = a.collectGroupMessages(groupId)
+	} else {
+		source = a.collectAllChatMessages()
+	}
+	return filterMessagesByChannel(source, channelId)
+}
+
 func filterMessagesByChannel(messages []*ChatMessage, channelId string) []*ChatMessage {
 	var filtered []*ChatMessage
 	for _, msg := range messages {
 		if msg.ChannelId == channelId {
+			filtered = append(filtered, msg)
+		}
+	}
+	if filtered == nil {
+		filtered = []*ChatMessage{}
+	}
+	return filtered
+}
+
+func filterMessagesBeforeTimestamp(messages []*ChatMessage, beforeTimestamp int64) []*ChatMessage {
+	if beforeTimestamp <= 0 {
+		return messages
+	}
+	filtered := make([]*ChatMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Timestamp < beforeTimestamp {
 			filtered = append(filtered, msg)
 		}
 	}
@@ -591,12 +541,75 @@ func paginateMessagesDesc(allMessages []*ChatMessage, cursorStr string, size int
 	}
 }
 
-func reverseMessages(messages []*ChatMessage) []*ChatMessage {
-	reversed := make([]*ChatMessage, len(messages))
-	for i, msg := range messages {
-		reversed[len(messages)-1-i] = msg
+func sliceMessagesByIndex(allMessages []*ChatMessage, startIndex int64, size int64) ([]*ChatMessage, int64) {
+	sort.SliceStable(allMessages, func(i, j int) bool {
+		if allMessages[i].Index != allMessages[j].Index {
+			return allMessages[i].Index < allMessages[j].Index
+		}
+		if allMessages[i].Timestamp != allMessages[j].Timestamp {
+			return allMessages[i].Timestamp < allMessages[j].Timestamp
+		}
+		return allMessages[i].PinId < allMessages[j].PinId
+	})
+
+	var messages []*ChatMessage
+	lastIndex := int64(0)
+	for _, msg := range allMessages {
+		if msg.Index < startIndex {
+			continue
+		}
+		messages = append(messages, msg)
+		if msg.Index > lastIndex {
+			lastIndex = msg.Index
+		}
+		if int64(len(messages)) >= size {
+			break
+		}
 	}
-	return reversed
+	if messages == nil {
+		messages = []*ChatMessage{}
+	}
+	return messages, lastIndex
+}
+
+func (a *Aggregator) nextChatIndex(groupId, channelId string) int64 {
+	var messages []*ChatMessage
+	if channelId != "" {
+		messages = a.collectChannelMessages(groupId, channelId)
+	} else {
+		messages = a.collectGroupRootMessages(groupId)
+	}
+	maxIndex := int64(-1)
+	for _, msg := range messages {
+		if msg.Index > maxIndex {
+			maxIndex = msg.Index
+		}
+	}
+	return maxIndex + 1
+}
+
+func latestMessageByTimestamp(messages []*ChatMessage) *ChatMessage {
+	var latest *ChatMessage
+	for _, msg := range messages {
+		if latest == nil ||
+			msg.Timestamp > latest.Timestamp ||
+			(msg.Timestamp == latest.Timestamp && msg.PinId > latest.PinId) {
+			latest = msg
+		}
+	}
+	return latest
+}
+
+func sortChatMessagesAscending(messages []*ChatMessage) {
+	sort.SliceStable(messages, func(i, j int) bool {
+		if messages[i].Timestamp != messages[j].Timestamp {
+			return messages[i].Timestamp < messages[j].Timestamp
+		}
+		if messages[i].Index != messages[j].Index {
+			return messages[i].Index < messages[j].Index
+		}
+		return messages[i].PinId < messages[j].PinId
+	})
 }
 
 type latestPrivateMessage struct {
@@ -654,6 +667,12 @@ func (a *Aggregator) getPrivateLatestChatInfoList(metaId string) []*UserLatestCh
 			peerAddress = msg.ToAddress
 			userInfo = msg.ToUserInfo
 		}
+		userInfo = normalizePrivateUserInfo(userInfo)
+		if !privateUserInfoHasChatPublicKey(userInfo) {
+			if hydrated := a.lookupPrivateUserInfo(peer, peerGlobalMetaId, peerAddress); hydrated != nil {
+				userInfo = hydrated
+			}
+		}
 
 		result = append(result, &UserLatestChatInfo{
 			Type:             "2",
@@ -667,7 +686,7 @@ func (a *Aggregator) getPrivateLatestChatInfoList(metaId string) []*UserLatestCh
 			BlockHeight:      msg.BlockHeight,
 			Chain:            msg.Chain,
 			Index:            msg.Index,
-			UserInfo:         normalizePrivateUserInfo(userInfo),
+			UserInfo:         userInfo,
 			LastMessage:      msg,
 			Path:             msg.Protocol,
 		})
@@ -676,6 +695,71 @@ func (a *Aggregator) getPrivateLatestChatInfoList(metaId string) []*UserLatestCh
 		result = []*UserLatestChatInfo{}
 	}
 	return result
+}
+
+func (a *Aggregator) lookupPrivateUserInfo(aliases ...string) interface{} {
+	var wanted []string
+	seenWanted := make(map[string]bool)
+	for _, alias := range aliases {
+		addIdentityAlias(&wanted, seenWanted, alias)
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+
+	for _, alias := range wanted {
+		raw, err := a.store.Get("userinfo", []byte("profile:"+alias))
+		if err != nil || raw == nil {
+			continue
+		}
+		var profile map[string]interface{}
+		if e := json.Unmarshal(raw, &profile); e != nil {
+			continue
+		}
+		return normalizePrivateUserInfo(profile)
+	}
+
+	var found interface{}
+	_ = a.store.ScanPrefix("userinfo", []byte("profile:"), func(key, value []byte) error {
+		if found != nil {
+			return nil
+		}
+		var profile map[string]interface{}
+		if e := json.Unmarshal(value, &profile); e != nil {
+			return nil
+		}
+		if profileMatchesAnyAlias(profile, wanted) {
+			found = normalizePrivateUserInfo(profile)
+		}
+		return nil
+	})
+	return found
+}
+
+func profileMatchesAnyAlias(profile map[string]interface{}, aliases []string) bool {
+	for _, key := range []string{"metaid", "metaId", "globalMetaId", "address"} {
+		value, _ := profile[key].(string)
+		for _, alias := range aliases {
+			if identityEqual(value, alias) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func privateUserInfoHasChatPublicKey(info interface{}) bool {
+	m, ok := info.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	if value, ok := m["chatPublicKey"].(string); ok && strings.TrimSpace(value) != "" {
+		return true
+	}
+	if value, ok := m["chatpubkey"].(string); ok && strings.TrimSpace(value) != "" {
+		return true
+	}
+	return false
 }
 
 func normalizePrivateUserInfo(info interface{}) interface{} {

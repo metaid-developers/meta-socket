@@ -360,11 +360,11 @@ func TestChatListByIndex(t *testing.T) {
 		agg.HandleBlockPin(chatPin)
 	}
 
-	// Query by index: startIndex=0, size=20 (should return latest 20, i.e., messages 49 down to 30)
+	// Query by index: startIndex=0, size=20 (idchat expects ascending message indexes 0..19)
 	w := performRequest(t, router, "GET", "/api/group-chat/group-chat-list-by-index?groupId=idx_test_group&startIndex=0&size=20")
 	var resp struct {
-		Code int            `json:"code"`
-		Data ChatListResult `json:"data"`
+		Code int                   `json:"code"`
+		Data ChatListByIndexResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -374,28 +374,32 @@ func TestChatListByIndex(t *testing.T) {
 	if len(resp.Data.List) != 20 {
 		t.Errorf("expected 20 messages, got %d", len(resp.Data.List))
 	}
-	// Latest message should be "IndexMessage 49"
-	if resp.Data.List[0].Content != "IndexMessage 49" {
-		t.Errorf("expected 'IndexMessage 49' as first, got %q", resp.Data.List[0].Content)
+	if resp.Data.LastIndex != 19 {
+		t.Errorf("expected lastIndex=19, got %d", resp.Data.LastIndex)
 	}
-	// 20th message should be "IndexMessage 30"
-	if resp.Data.List[19].Content != "IndexMessage 30" {
-		t.Errorf("expected 'IndexMessage 30' as 20th, got %q", resp.Data.List[19].Content)
+	if resp.Data.List[0].Content != "IndexMessage 0" || resp.Data.List[0].Index != 0 {
+		t.Errorf("expected index 0 as first, got content=%q index=%d", resp.Data.List[0].Content, resp.Data.List[0].Index)
+	}
+	if resp.Data.List[19].Content != "IndexMessage 19" || resp.Data.List[19].Index != 19 {
+		t.Errorf("expected index 19 as 20th, got content=%q index=%d", resp.Data.List[19].Content, resp.Data.List[19].Index)
 	}
 
 	// Query next page: startIndex=20, size=20
 	w2 := performRequest(t, router, "GET", "/api/group-chat/group-chat-list-by-index?groupId=idx_test_group&startIndex=20&size=20")
 	var resp2 struct {
-		Code int            `json:"code"`
-		Data ChatListResult `json:"data"`
+		Code int                   `json:"code"`
+		Data ChatListByIndexResult `json:"data"`
 	}
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
 
 	if len(resp2.Data.List) != 20 {
 		t.Errorf("page 2: expected 20 messages, got %d", len(resp2.Data.List))
 	}
-	if resp2.Data.List[0].Content != "IndexMessage 29" {
-		t.Errorf("page 2 first: expected 'IndexMessage 29', got %q", resp2.Data.List[0].Content)
+	if resp2.Data.LastIndex != 39 {
+		t.Errorf("page 2: expected lastIndex=39, got %d", resp2.Data.LastIndex)
+	}
+	if resp2.Data.List[0].Content != "IndexMessage 20" || resp2.Data.List[0].Index != 20 {
+		t.Errorf("page 2 first: expected index 20, got content=%q index=%d", resp2.Data.List[0].Content, resp2.Data.List[0].Index)
 	}
 
 	t.Logf("Index query OK: page1=%d msgs, page2=%d msgs",
@@ -895,6 +899,101 @@ func TestGroupListAndLatestChatInfoUseMemberIdentityAliases(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("GetUserLatestChatInfoList(%s) missing alias_group in %#v", identity, latest)
+		}
+	}
+}
+
+func TestGroupChatPinsAssignContinuousIndexes(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	createPin := &aggregator.PinInscription{
+		Id:            "index_group_create:i0",
+		Path:          "/protocols/simplegroupcreate",
+		Operation:     "create",
+		CreateAddress: "addr_creator",
+		CreateMetaId:  "creator_local",
+		GlobalMetaId:  "creator_global",
+		ChainName:     "mvc",
+		Timestamp:     1000,
+		GenesisHeight: 100,
+		ContentBody: mustMarshal(t, map[string]interface{}{
+			"groupId":   "index_group",
+			"groupName": "Index Group",
+		}),
+	}
+	if _, err := agg.HandleBlockPin(createPin); err != nil {
+		t.Fatalf("HandleBlockPin(create): %v", err)
+	}
+
+	for i, content := range []string{"first group message", "second group message"} {
+		pin := &aggregator.PinInscription{
+			Id:            fmt.Sprintf("index_group_msg_%d:i0", i+1),
+			Path:          "/protocols/simplegroupchat",
+			Operation:     "create",
+			CreateAddress: "addr_creator",
+			CreateMetaId:  "creator_local",
+			GlobalMetaId:  "creator_global",
+			ChainName:     "mvc",
+			Timestamp:     int64(2000 + i),
+			GenesisHeight: int64(200 + i),
+			ContentBody: mustMarshal(t, map[string]interface{}{
+				"groupId":     "index_group",
+				"content":     content,
+				"contentType": "text/plain",
+			}),
+		}
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(group chat %d): %v", i+1, err)
+		}
+	}
+
+	groupResult, err := agg.GetChatListByIndexCompat("index_group", 0, 10)
+	if err != nil {
+		t.Fatalf("GetChatListByIndexCompat: %v", err)
+	}
+	if len(groupResult.List) != 2 || groupResult.LastIndex != 1 {
+		t.Fatalf("group by-index should return two indexed messages and lastIndex=1, got lastIndex=%d list=%#v", groupResult.LastIndex, groupResult.List)
+	}
+	for i, msg := range groupResult.List {
+		if msg.Index != int64(i) {
+			t.Fatalf("group message %d index=%d, want %d; list=%#v", i, msg.Index, i, groupResult.List)
+		}
+	}
+
+	for i, content := range []string{"first channel message", "second channel message"} {
+		pin := &aggregator.PinInscription{
+			Id:            fmt.Sprintf("index_channel_msg_%d:i0", i+1),
+			Path:          "/protocols/simplegroupchat",
+			Operation:     "create",
+			CreateAddress: "addr_creator",
+			CreateMetaId:  "creator_local",
+			GlobalMetaId:  "creator_global",
+			ChainName:     "mvc",
+			Timestamp:     int64(3000 + i),
+			GenesisHeight: int64(300 + i),
+			ContentBody: mustMarshal(t, map[string]interface{}{
+				"groupId":     "index_group",
+				"channelId":   "index_channel",
+				"content":     content,
+				"contentType": "text/plain",
+			}),
+		}
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(channel chat %d): %v", i+1, err)
+		}
+	}
+
+	channelResult, err := agg.GetChannelChatListByIndex("", "index_channel", 0, 10)
+	if err != nil {
+		t.Fatalf("GetChannelChatListByIndex: %v", err)
+	}
+	if len(channelResult.List) != 2 || channelResult.LastIndex != 1 {
+		t.Fatalf("channel by-index should return two indexed messages and lastIndex=1, got lastIndex=%d list=%#v", channelResult.LastIndex, channelResult.List)
+	}
+	for i, msg := range channelResult.List {
+		if msg.Index != int64(i) {
+			t.Fatalf("channel message %d index=%d, want %d; list=%#v", i, msg.Index, i, channelResult.List)
 		}
 	}
 }

@@ -84,6 +84,12 @@ func pchatPrefix(metaId1, metaId2 string) []byte {
 
 // SavePrivateMessage persists a private chat message to PebbleDB.
 func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
+	if msg == nil {
+		return nil
+	}
+	if msg.Index < 0 {
+		msg.Index = a.nextPrivateMessageIndex(msg.From, msg.To)
+	}
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -153,33 +159,54 @@ func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr 
 	}, nil
 }
 
-// GetPrivateChatListByIndex returns messages by startIndex (descending by timestamp, newest first).
+// GetPrivateChatListByIndex returns messages by their continuous conversation index.
 func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, startIndex int64, size int64) (*PrivateChatListResult, error) {
 	allMessages := a.collectPrivateMessages(myMetaId, otherMetaId)
 
-	total := int64(len(allMessages))
-
-	// Reverse for descending order (newest first)
-	reversed := make([]*PrivateMessage, len(allMessages))
-	for i, msg := range allMessages {
-		reversed[len(allMessages)-1-i] = msg
-	}
+	sort.SliceStable(allMessages, func(i, j int) bool {
+		if allMessages[i].Index != allMessages[j].Index {
+			return allMessages[i].Index < allMessages[j].Index
+		}
+		if allMessages[i].Timestamp != allMessages[j].Timestamp {
+			return allMessages[i].Timestamp < allMessages[j].Timestamp
+		}
+		return privateMessageDedupeKey(allMessages[i]) < privateMessageDedupeKey(allMessages[j])
+	})
 
 	var messages []*PrivateMessage
-	for i := startIndex; i < total && int64(len(messages)) < size; i++ {
-		messages = append(messages, reversed[i])
+	lastIndex := int64(0)
+	for _, msg := range allMessages {
+		if msg.Index < startIndex {
+			continue
+		}
+		messages = append(messages, msg)
+		if msg.Index > lastIndex {
+			lastIndex = msg.Index
+		}
+		if int64(len(messages)) >= size {
+			break
+		}
 	}
-
-	nextTimestamp := int64(0)
-	if len(messages) > 0 {
-		nextTimestamp = messages[len(messages)-1].Timestamp
+	if messages == nil {
+		messages = []*PrivateMessage{}
 	}
 
 	return &PrivateChatListResult{
-		Total:         total,
-		NextTimestamp: nextTimestamp,
+		Total:         int64(len(messages)),
+		NextTimestamp: lastIndex,
 		List:          messages,
 	}, nil
+}
+
+func (a *Aggregator) nextPrivateMessageIndex(from, to string) int64 {
+	messages := a.collectPrivateMessages(from, to)
+	maxIndex := int64(-1)
+	for _, msg := range messages {
+		if msg.Index > maxIndex {
+			maxIndex = msg.Index
+		}
+	}
+	return maxIndex + 1
 }
 
 func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) []*PrivateMessage {
