@@ -349,6 +349,7 @@ func TestRouter_AggregatorRegistrationDoesNotPanic(t *testing.T) {
 
 func TestRouter_BotHomepageGlobalMetaIDAcceptance(t *testing.T) {
 	fixture := setupFullRouterFixture(t)
+	const botAddress = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
 
 	if _, err := fixture.botHomepageAgg.HandleBlockPin(nil); err != nil {
 		t.Fatalf("HandleBlockPin(nil): %v", err)
@@ -358,7 +359,7 @@ func TestRouter_BotHomepageGlobalMetaIDAcceptance(t *testing.T) {
 		Id:        "init-bot:i0",
 		Path:      "/",
 		MetaId:    "bot-meta",
-		Address:   "18BotHomepage",
+		Address:   botAddress,
 		ChainName: "mvc",
 	}); err != nil {
 		t.Fatalf("HandleBlockPin(user init): %v", err)
@@ -367,7 +368,7 @@ func TestRouter_BotHomepageGlobalMetaIDAcceptance(t *testing.T) {
 		Id:          "name-bot:i0",
 		Path:        "/info/name",
 		MetaId:      "bot-meta",
-		Address:     "18BotHomepage",
+		Address:     botAddress,
 		ChainName:   "mvc",
 		ContentBody: []byte("Homepage Bot"),
 	}); err != nil {
@@ -382,18 +383,7 @@ func TestRouter_BotHomepageGlobalMetaIDAcceptance(t *testing.T) {
 		t.Fatalf("LookupByMetaId returned nil")
 	}
 	if profile.GlobalMetaID == "" {
-		// The synthetic 18BotHomepage address is not ID-address encodable.
-		profile.GlobalMetaID = "idq1bothomepageacceptance"
-		if err := fixture.store.Set("userinfo", []byte("profile:"+profile.MetaID), mustMarshalJSON(t, profile)); err != nil {
-			t.Fatalf("seed profile globalMetaId: %v", err)
-		}
-		profile, err = fixture.userAgg.LookupByMetaId("bot-meta")
-		if err != nil {
-			t.Fatalf("LookupByMetaId after globalMetaId seed: %v", err)
-		}
-		if profile == nil || profile.GlobalMetaID == "" {
-			t.Fatalf("profile globalMetaId should be seeded, got %#v", profile)
-		}
+		t.Fatalf("userinfo should generate globalMetaId from %s", botAddress)
 	}
 
 	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/"+profile.GlobalMetaID)
