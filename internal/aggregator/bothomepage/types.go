@@ -26,14 +26,14 @@ type CanonicalIdentity struct {
 type Profile struct {
 	Name            string `json:"name"`
 	Avatar          string `json:"avatar"`
-	AvatarPinId     string `json:"avatarPinId,omitempty"`
+	AvatarPinId     string `json:"avatarPinId"`
 	Background      string `json:"background"`
-	BackgroundPinId string `json:"backgroundPinId,omitempty"`
+	BackgroundPinId string `json:"backgroundPinId"`
 	Bio             string `json:"bio"`
-	BioPinId        string `json:"bioPinId,omitempty"`
+	BioPinId        string `json:"bioPinId"`
 	ChatPubkey      string `json:"chatPubkey"`
-	ChatPubkeyPinId string `json:"chatPubkeyPinId,omitempty"`
-	NftAvatar       string `json:"nftAvatar,omitempty"`
+	ChatPubkeyPinId string `json:"chatPubkeyPinId"`
+	NftAvatar       string `json:"nftAvatar"`
 	DisplayGlobalId string `json:"displayGlobalMetaId"`
 }
 

@@ -1,6 +1,7 @@
 package bothomepage
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -206,6 +207,28 @@ func TestCustomHomepagePlanSchema(t *testing.T) {
 	}
 	if custom.URI == "" || custom.PinId == "" || custom.ContentType == "" || custom.Renderer == "" || custom.Txid == "" || custom.ProtocolPath == "" {
 		t.Fatalf("custom homepage schema fields did not round trip: %+v", custom)
+	}
+}
+
+func TestProfileStableJSONKeys(t *testing.T) {
+	raw, err := json.Marshal(Profile{})
+	if err != nil {
+		t.Fatalf("json.Marshal(Profile{}): %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("json.Unmarshal(%s): %v", raw, err)
+	}
+
+	for _, key := range []string{"avatarPinId", "backgroundPinId", "bioPinId", "chatPubkeyPinId", "nftAvatar"} {
+		value, ok := got[key]
+		if !ok {
+			t.Fatalf("zero-value Profile JSON missing stable key %q: %s", key, raw)
+		}
+		if value != "" {
+			t.Fatalf("zero-value Profile JSON key %q = %v, want empty string", key, value)
+		}
 	}
 }
 
