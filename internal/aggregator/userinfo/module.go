@@ -34,6 +34,7 @@ type UserProfile struct {
 	Bio             string `json:"bio,omitempty"`
 	BioId           string `json:"bioId,omitempty"`
 	Background      string `json:"background,omitempty"`
+	BackgroundId    string `json:"backgroundId,omitempty"`
 	ChatPublicKey   string `json:"chatpubkey,omitempty"`
 	ChatPublicKeyId string `json:"chatpubkeyId,omitempty"`
 	ChainName       string `json:"chainName,omitempty"`
@@ -135,6 +136,7 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		profile.BioId = pin.Id
 	case path == "/info/background":
 		profile.Background = "/content/" + pin.Id
+		profile.BackgroundId = pin.Id
 	case path == "/info/chatpubkey":
 		profile.ChatPublicKey = string(pin.ContentBody)
 		profile.ChatPublicKeyId = pin.Id

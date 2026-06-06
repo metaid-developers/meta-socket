@@ -1,0 +1,215 @@
+package bothomepage
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
+)
+
+type fakeProfileLookup struct {
+	profile *ProfileSnapshot
+	err     error
+	seen    string
+}
+
+func (f *fakeProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
+	f.seen = globalMetaId
+	return f.profile, f.err
+}
+
+type fakeServiceLister struct {
+	result *skillservice.ListResult
+	err    error
+	params skillservice.ListParams
+}
+
+func (f *fakeServiceLister) List(params skillservice.ListParams) (*skillservice.ListResult, error) {
+	f.params = params
+	return f.result, f.err
+}
+
+func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.now = func() int64 { return 1780760000000 }
+	agg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
+
+	lookup := &fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:  "idqCanonicalBot",
+		MetaId:        "metaBot",
+		Address:       "1BotAddress",
+		Name:          "Fortune Bot",
+		NameId:        "name-pin:i0",
+		Avatar:        "/content/avatar-pin",
+		AvatarId:      "avatar-pin",
+		Background:    "/content/background-pin",
+		BackgroundId:  "background-pin:i0",
+		Bio:           "Reads the chain and answers directly.",
+		BioId:         "bio-pin:i0",
+		ChatPublicKey: "02chatpubkey",
+		ChatPubKeyId:  "chat-pin:i0",
+		NftAvatar:     "nft-avatar-pin",
+		ChainName:     "mvc",
+	}}
+	agg.SetProfileLookup(lookup)
+
+	got, err := agg.Build("idqBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if lookup.seen != "idqBot" {
+		t.Fatalf("lookup globalMetaId = %q, want idqBot", lookup.seen)
+	}
+	if got.SchemaVersion != "botHomepage.v1" {
+		t.Fatalf("SchemaVersion = %q, want botHomepage.v1", got.SchemaVersion)
+	}
+	if got.ResolvedAt != 1780760000000 {
+		t.Fatalf("ResolvedAt = %d, want fixed clock", got.ResolvedAt)
+	}
+	if got.GlobalMetaId != "idqBot" {
+		t.Fatalf("GlobalMetaId = %q, want request value", got.GlobalMetaId)
+	}
+	if got.Canonical.GlobalMetaId != "idqCanonicalBot" {
+		t.Fatalf("Canonical.GlobalMetaId = %q", got.Canonical.GlobalMetaId)
+	}
+	if got.Canonical.MetaId != "metaBot" {
+		t.Fatalf("Canonical.MetaId = %q", got.Canonical.MetaId)
+	}
+	if got.Canonical.Address != "1BotAddress" {
+		t.Fatalf("Canonical.Address = %q", got.Canonical.Address)
+	}
+	if got.Canonical.ChainName != "mvc" {
+		t.Fatalf("Canonical.ChainName = %q", got.Canonical.ChainName)
+	}
+
+	if got.Profile.Name != "Fortune Bot" {
+		t.Fatalf("Profile.Name = %q", got.Profile.Name)
+	}
+	if got.Profile.Avatar != "https://file.metaid.io/metafile-indexer/content/avatar-pin" {
+		t.Fatalf("Profile.Avatar = %q", got.Profile.Avatar)
+	}
+	if got.Profile.AvatarPinId != "avatar-pin" {
+		t.Fatalf("Profile.AvatarPinId = %q", got.Profile.AvatarPinId)
+	}
+	if got.Profile.Background != "https://file.metaid.io/metafile-indexer/content/background-pin" {
+		t.Fatalf("Profile.Background = %q", got.Profile.Background)
+	}
+	if got.Profile.BackgroundPinId != "background-pin:i0" {
+		t.Fatalf("Profile.BackgroundPinId = %q", got.Profile.BackgroundPinId)
+	}
+	if got.Profile.ChatPubkey != "02chatpubkey" {
+		t.Fatalf("Profile.ChatPubkey = %q", got.Profile.ChatPubkey)
+	}
+	if got.Profile.DisplayGlobalId == "" || got.Profile.DisplayGlobalId == got.Canonical.GlobalMetaId {
+		t.Fatalf("Profile.DisplayGlobalId = %q, want abbreviated canonical id", got.Profile.DisplayGlobalId)
+	}
+
+	if got.Homepage.Mode != "default" {
+		t.Fatalf("Homepage.Mode = %q", got.Homepage.Mode)
+	}
+	if got.Homepage.Title != "Fortune Bot" {
+		t.Fatalf("Homepage.Title = %q", got.Homepage.Title)
+	}
+	if got.Homepage.Summary != "Reads the chain and answers directly." {
+		t.Fatalf("Homepage.Summary = %q", got.Homepage.Summary)
+	}
+	if got.Homepage.Custom != nil {
+		t.Fatalf("Homepage.Custom = %+v, want nil", got.Homepage.Custom)
+	}
+
+	if got.Presence.State != "unknown" {
+		t.Fatalf("Presence.State = %q, want unknown", got.Presence.State)
+	}
+	if got.Presence.UpdatedAt != nil {
+		t.Fatalf("Presence.UpdatedAt = %v, want nil", *got.Presence.UpdatedAt)
+	}
+	if len(got.Services) != 0 {
+		t.Fatalf("Services length = %d, want 0", len(got.Services))
+	}
+
+	if len(got.Actions) != 3 {
+		t.Fatalf("Actions length = %d, want 3", len(got.Actions))
+	}
+	if got.Actions[0].Kind != "message" || !got.Actions[0].Enabled {
+		t.Fatalf("message action = %+v, want enabled message", got.Actions[0])
+	}
+	if got.Actions[1].Kind != "services" || got.Actions[1].Enabled {
+		t.Fatalf("services action = %+v, want disabled services", got.Actions[1])
+	}
+	if got.Actions[2].Kind != "copy-uri" || !got.Actions[2].Enabled || got.Actions[2].URI != "metaid://idqCanonicalBot" {
+		t.Fatalf("copy-uri action = %+v", got.Actions[2])
+	}
+
+	if got.Proofs.VerificationState != "partial" {
+		t.Fatalf("Proofs.VerificationState = %q, want partial", got.Proofs.VerificationState)
+	}
+	if len(got.Proofs.Profile) == 0 {
+		t.Fatal("expected non-empty profile proofs")
+	}
+	assertProfileProof(t, got.Proofs.Profile, "name", "/info/name", "name-pin:i0", "idqCanonicalBot")
+	assertProfileProof(t, got.Proofs.Profile, "avatar", "/info/avatar", "avatar-pin", "idqCanonicalBot")
+	assertProfileProof(t, got.Proofs.Profile, "background", "/info/background", "background-pin:i0", "idqCanonicalBot")
+	assertProfileProof(t, got.Proofs.Profile, "bio", "/info/bio", "bio-pin:i0", "idqCanonicalBot")
+	assertProfileProof(t, got.Proofs.Profile, "chatPubkey", "/info/chatpubkey", "chat-pin:i0", "idqCanonicalBot")
+
+	if len(got.Warnings) == 0 {
+		t.Fatal("expected warnings for missing proof metadata")
+	}
+	if !containsWarning(got.Warnings, "txid/contentHash metadata is missing") {
+		t.Fatalf("warnings = %v, want missing metadata warning", got.Warnings)
+	}
+
+	if got.Source.Resolver != "metaso-p2p" {
+		t.Fatalf("Source.Resolver = %q", got.Source.Resolver)
+	}
+	if got.Source.Node != "https://file.metaid.io" {
+		t.Fatalf("Source.Node = %q", got.Source.Node)
+	}
+	if got.Source.ProfileEndpoint != "/api/info/globalmetaid/:globalMetaId" {
+		t.Fatalf("Source.ProfileEndpoint = %q", got.Source.ProfileEndpoint)
+	}
+	if got.Source.ServiceEndpoint != "/api/bot-hub/skill-service/list" {
+		t.Fatalf("Source.ServiceEndpoint = %q", got.Source.ServiceEndpoint)
+	}
+	if got.Source.ContentBaseURL != "https://file.metaid.io/metafile-indexer/content" {
+		t.Fatalf("Source.ContentBaseURL = %q", got.Source.ContentBaseURL)
+	}
+	if got.Source.FetchedAt != 1780760000000 {
+		t.Fatalf("Source.FetchedAt = %d", got.Source.FetchedAt)
+	}
+	if got.Source.Stale {
+		t.Fatal("Source.Stale = true, want false")
+	}
+}
+
+func assertProfileProof(t *testing.T, proofs []ProfileProof, field, path, pinID, publisher string) {
+	t.Helper()
+	for _, proof := range proofs {
+		if proof.Field == field {
+			if proof.ProtocolPath != path {
+				t.Fatalf("%s ProtocolPath = %q, want %q", field, proof.ProtocolPath, path)
+			}
+			if proof.PinId != pinID {
+				t.Fatalf("%s PinId = %q, want %q", field, proof.PinId, pinID)
+			}
+			if proof.PublisherGlobalMetaId != publisher {
+				t.Fatalf("%s PublisherGlobalMetaId = %q, want %q", field, proof.PublisherGlobalMetaId, publisher)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing profile proof for field %q: %+v", field, proofs)
+}
+
+func containsWarning(warnings []string, needle string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, needle) {
+			return true
+		}
+	}
+	return false
+}
