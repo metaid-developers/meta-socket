@@ -65,4 +65,5 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 }
 
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
+	router.GET("/bot-homepage/globalmetaid/:globalMetaId", a.handleGlobalMetaID)
 }
