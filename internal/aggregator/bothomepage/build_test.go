@@ -38,21 +38,21 @@ func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
 	agg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
 
 	lookup := &fakeProfileLookup{profile: &ProfileSnapshot{
-		GlobalMetaId:  "idqCanonicalBot",
-		MetaId:        "metaBot",
-		Address:       "1BotAddress",
-		Name:          "Fortune Bot",
-		NameId:        "name-pin:i0",
-		Avatar:        "/content/avatar-pin",
-		AvatarId:      "avatar-pin",
-		Background:    "/content/background-pin",
-		BackgroundId:  "background-pin:i0",
-		Bio:           "Reads the chain and answers directly.",
-		BioId:         "bio-pin:i0",
-		ChatPublicKey: "02chatpubkey",
-		ChatPubKeyId:  "chat-pin:i0",
-		NftAvatar:     "nft-avatar-pin",
-		ChainName:     "mvc",
+		GlobalMetaId:    "idqCanonicalBotLongValue",
+		MetaId:          "metaBot",
+		Address:         "1BotAddress",
+		Name:            "Fortune Bot",
+		NameId:          "name-pin:i0",
+		Avatar:          "/content/avatar-pin",
+		AvatarId:        "avatar-pin",
+		Background:      "/content/background-pin",
+		BackgroundId:    "background-pin:i0",
+		Bio:             "Reads the chain and answers directly.",
+		BioId:           "bio-pin:i0",
+		ChatPublicKey:   "02chatpubkey",
+		ChatPublicKeyId: "chat-pin:i0",
+		NftAvatar:       "nft-avatar-pin",
+		ChainName:       "mvc",
 	}}
 	agg.SetProfileLookup(lookup)
 
@@ -73,7 +73,7 @@ func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
 	if got.GlobalMetaId != "idqBot" {
 		t.Fatalf("GlobalMetaId = %q, want request value", got.GlobalMetaId)
 	}
-	if got.Canonical.GlobalMetaId != "idqCanonicalBot" {
+	if got.Canonical.GlobalMetaId != "idqCanonicalBotLongValue" {
 		t.Fatalf("Canonical.GlobalMetaId = %q", got.Canonical.GlobalMetaId)
 	}
 	if got.Canonical.MetaId != "metaBot" {
@@ -127,6 +127,9 @@ func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
 	if got.Presence.UpdatedAt != nil {
 		t.Fatalf("Presence.UpdatedAt = %v, want nil", *got.Presence.UpdatedAt)
 	}
+	if got.Presence.Source != "" {
+		t.Fatalf("Presence.Source = %q, want empty", got.Presence.Source)
+	}
 	if len(got.Services) != 0 {
 		t.Fatalf("Services length = %d, want 0", len(got.Services))
 	}
@@ -134,27 +137,33 @@ func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
 	if len(got.Actions) != 3 {
 		t.Fatalf("Actions length = %d, want 3", len(got.Actions))
 	}
-	if got.Actions[0].Kind != "message" || !got.Actions[0].Enabled {
-		t.Fatalf("message action = %+v, want enabled message", got.Actions[0])
+	if got.Actions[0].Id != "message" || got.Actions[0].Kind != "private-chat" || !got.Actions[0].Enabled || !got.Actions[0].RequiresUsingIdentity {
+		t.Fatalf("message action = %+v, want enabled private-chat requiring identity", got.Actions[0])
 	}
-	if got.Actions[1].Kind != "services" || got.Actions[1].Enabled {
-		t.Fatalf("services action = %+v, want disabled services", got.Actions[1])
+	if got.Actions[1].Id != "services" || got.Actions[1].Kind != "service-list" || got.Actions[1].Enabled || !got.Actions[1].RequiresUsingIdentity {
+		t.Fatalf("services action = %+v, want disabled service-list requiring identity", got.Actions[1])
 	}
-	if got.Actions[2].Kind != "copy-uri" || !got.Actions[2].Enabled || got.Actions[2].URI != "metaid://idqCanonicalBot" {
+	if got.Actions[2].Id != "copy-uri" || got.Actions[2].Kind != "copy" || !got.Actions[2].Enabled || got.Actions[2].RequiresUsingIdentity || got.Actions[2].URI != "metaid://idqCanonicalBotLongValue" {
 		t.Fatalf("copy-uri action = %+v", got.Actions[2])
 	}
 
 	if got.Proofs.VerificationState != "partial" {
 		t.Fatalf("Proofs.VerificationState = %q, want partial", got.Proofs.VerificationState)
 	}
+	if got.Proofs.Identity != nil {
+		t.Fatalf("Proofs.Identity = %+v, want nil", got.Proofs.Identity)
+	}
+	if got.Proofs.Homepage != nil {
+		t.Fatalf("Proofs.Homepage = %+v, want nil", got.Proofs.Homepage)
+	}
 	if len(got.Proofs.Profile) == 0 {
 		t.Fatal("expected non-empty profile proofs")
 	}
-	assertProfileProof(t, got.Proofs.Profile, "name", "/info/name", "name-pin:i0", "idqCanonicalBot")
-	assertProfileProof(t, got.Proofs.Profile, "avatar", "/info/avatar", "avatar-pin", "idqCanonicalBot")
-	assertProfileProof(t, got.Proofs.Profile, "background", "/info/background", "background-pin:i0", "idqCanonicalBot")
-	assertProfileProof(t, got.Proofs.Profile, "bio", "/info/bio", "bio-pin:i0", "idqCanonicalBot")
-	assertProfileProof(t, got.Proofs.Profile, "chatPubkey", "/info/chatpubkey", "chat-pin:i0", "idqCanonicalBot")
+	assertProfileProof(t, got.Proofs.Profile, "name", "/info/name", "name-pin:i0", "idqCanonicalBotLongValue")
+	assertProfileProof(t, got.Proofs.Profile, "avatar", "/info/avatar", "avatar-pin", "idqCanonicalBotLongValue")
+	assertProfileProof(t, got.Proofs.Profile, "background", "/info/background", "background-pin:i0", "idqCanonicalBotLongValue")
+	assertProfileProof(t, got.Proofs.Profile, "bio", "/info/bio", "bio-pin:i0", "idqCanonicalBotLongValue")
+	assertProfileProof(t, got.Proofs.Profile, "chatPubkey", "/info/chatpubkey", "chat-pin:i0", "idqCanonicalBotLongValue")
 
 	if len(got.Warnings) == 0 {
 		t.Fatal("expected warnings for missing proof metadata")
@@ -183,6 +192,20 @@ func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
 	}
 	if got.Source.Stale {
 		t.Fatal("Source.Stale = true, want false")
+	}
+}
+
+func TestCustomHomepagePlanSchema(t *testing.T) {
+	custom := CustomHomepage{
+		URI:          "metafile://homepage-pin",
+		PinId:        "homepage-pin:i0",
+		ContentType:  "text/html",
+		Renderer:     "html",
+		Txid:         "homepage-tx",
+		ProtocolPath: "/protocols/bot-homepage",
+	}
+	if custom.URI == "" || custom.PinId == "" || custom.ContentType == "" || custom.Renderer == "" || custom.Txid == "" || custom.ProtocolPath == "" {
+		t.Fatalf("custom homepage schema fields did not round trip: %+v", custom)
 	}
 }
 

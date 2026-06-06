@@ -4,21 +4,21 @@ import "github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 
 // ProfileSnapshot is the profile subset needed to assemble a bot homepage.
 type ProfileSnapshot struct {
-	GlobalMetaId  string
-	MetaId        string
-	Address       string
-	Name          string
-	NameId        string
-	Avatar        string
-	AvatarId      string
-	Background    string
-	BackgroundId  string
-	NftAvatar     string
-	Bio           string
-	BioId         string
-	ChatPublicKey string
-	ChatPubKeyId  string
-	ChainName     string
+	GlobalMetaId    string
+	MetaId          string
+	Address         string
+	Name            string
+	NameId          string
+	Avatar          string
+	AvatarId        string
+	Background      string
+	BackgroundId    string
+	NftAvatar       string
+	Bio             string
+	BioId           string
+	ChatPublicKey   string
+	ChatPublicKeyId string
+	ChainName       string
 }
 
 type ProfileLookup interface {
@@ -46,20 +46,20 @@ func profileFromUserInfo(p *userinfo.UserProfile) *ProfileSnapshot {
 		return nil
 	}
 	return &ProfileSnapshot{
-		GlobalMetaId:  p.GlobalMetaID,
-		MetaId:        p.MetaID,
-		Address:       p.Address,
-		Name:          p.Name,
-		NameId:        p.NameId,
-		Avatar:        p.Avatar,
-		AvatarId:      p.AvatarId,
-		Background:    p.Background,
-		BackgroundId:  p.BackgroundId,
-		NftAvatar:     p.NftAvatar,
-		Bio:           p.Bio,
-		BioId:         p.BioId,
-		ChatPublicKey: p.ChatPublicKey,
-		ChatPubKeyId:  p.ChatPublicKeyId,
-		ChainName:     p.ChainName,
+		GlobalMetaId:    p.GlobalMetaID,
+		MetaId:          p.MetaID,
+		Address:         p.Address,
+		Name:            p.Name,
+		NameId:          p.NameId,
+		Avatar:          p.Avatar,
+		AvatarId:        p.AvatarId,
+		Background:      p.Background,
+		BackgroundId:    p.BackgroundId,
+		NftAvatar:       p.NftAvatar,
+		Bio:             p.Bio,
+		BioId:           p.BioId,
+		ChatPublicKey:   p.ChatPublicKey,
+		ChatPublicKeyId: p.ChatPublicKeyId,
+		ChainName:       p.ChainName,
 	}
 }

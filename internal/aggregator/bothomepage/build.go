@@ -46,8 +46,9 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 	services := make([]Service, 0)
 	proofs := Proofs{
 		VerificationState: "unverified",
-		Summary:           ProofSummary{},
+		Identity:          nil,
 		Profile:           make([]ProfileProof, 0),
+		Homepage:          nil,
 		Services:          make([]ServiceProof, 0),
 	}
 	warnings := make([]string, 0)
@@ -84,7 +85,6 @@ func (a *Aggregator) toProfile(p *ProfileSnapshot, canonicalGlobalMetaId string)
 	}
 	return Profile{
 		Name:            strings.TrimSpace(p.Name),
-		NamePinId:       strings.TrimSpace(p.NameId),
 		Avatar:          a.resolveAsset(p.Avatar),
 		AvatarPinId:     strings.TrimSpace(p.AvatarId),
 		Background:      a.resolveAsset(p.Background),
@@ -92,7 +92,7 @@ func (a *Aggregator) toProfile(p *ProfileSnapshot, canonicalGlobalMetaId string)
 		Bio:             strings.TrimSpace(p.Bio),
 		BioPinId:        strings.TrimSpace(p.BioId),
 		ChatPubkey:      strings.TrimSpace(p.ChatPublicKey),
-		ChatPubkeyPinId: strings.TrimSpace(p.ChatPubKeyId),
+		ChatPubkeyPinId: strings.TrimSpace(p.ChatPublicKeyId),
 		NftAvatar:       a.resolveAsset(p.NftAvatar),
 		DisplayGlobalId: abbreviateGlobalMetaId(canonicalGlobalMetaId),
 	}
@@ -134,20 +134,26 @@ func contentOrigin(baseURL string) string {
 func buildActions(chatPubkey string, serviceCount int, canonicalGlobalMetaId string) []Action {
 	return []Action{
 		{
-			Kind:    "message",
-			Label:   "Message",
-			Enabled: strings.TrimSpace(chatPubkey) != "",
+			Id:                    "message",
+			Label:                 "Message",
+			Kind:                  "private-chat",
+			Enabled:               strings.TrimSpace(chatPubkey) != "",
+			RequiresUsingIdentity: true,
 		},
 		{
-			Kind:    "services",
-			Label:   "Services",
-			Enabled: serviceCount > 0,
+			Id:                    "services",
+			Label:                 "Services",
+			Kind:                  "service-list",
+			Enabled:               serviceCount > 0,
+			RequiresUsingIdentity: true,
 		},
 		{
-			Kind:    "copy-uri",
-			Label:   "Copy URI",
-			Enabled: true,
-			URI:     "metaid://" + strings.TrimSpace(canonicalGlobalMetaId),
+			Id:                    "copy-uri",
+			Label:                 "Copy URI",
+			Kind:                  "copy",
+			Enabled:               true,
+			RequiresUsingIdentity: false,
+			URI:                   "metaid://" + strings.TrimSpace(canonicalGlobalMetaId),
 		},
 	}
 }
@@ -155,13 +161,14 @@ func buildActions(chatPubkey string, serviceCount int, canonicalGlobalMetaId str
 func buildProfileProofs(p *ProfileSnapshot, canonicalGlobalMetaId string) (Proofs, []string) {
 	proofs := Proofs{
 		VerificationState: "unverified",
-		Summary:           ProofSummary{},
+		Identity:          nil,
 		Profile:           make([]ProfileProof, 0),
+		Homepage:          nil,
 		Services:          make([]ServiceProof, 0),
 	}
 	warnings := make([]string, 0)
 	if p == nil {
-		warnings = append(warnings, "profile proof metadata unavailable")
+		warnings = append(warnings, "profile proof metadata is unavailable")
 		return proofs, warnings
 	}
 
@@ -182,14 +189,13 @@ func buildProfileProofs(p *ProfileSnapshot, canonicalGlobalMetaId string) (Proof
 	add("avatar", "/info/avatar", p.AvatarId)
 	add("background", "/info/background", p.BackgroundId)
 	add("bio", "/info/bio", p.BioId)
-	add("chatPubkey", "/info/chatpubkey", p.ChatPubKeyId)
+	add("chatPubkey", "/info/chatpubkey", p.ChatPublicKeyId)
 
-	proofs.Summary.ProfileCount = len(proofs.Profile)
 	if len(proofs.Profile) > 0 {
 		proofs.VerificationState = "partial"
 		return proofs, warnings
 	}
-	warnings = append(warnings, "profile proof metadata unavailable")
+	warnings = append(warnings, "profile proof metadata is unavailable")
 	return proofs, warnings
 }
 
@@ -201,7 +207,7 @@ func (a *Aggregator) resolveAsset(asset string) string {
 }
 
 func unknownPresence() Presence {
-	return Presence{State: "unknown", UpdatedAt: nil}
+	return Presence{State: "unknown", UpdatedAt: nil, Source: ""}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -215,8 +221,8 @@ func firstNonEmpty(values ...string) string {
 
 func abbreviateGlobalMetaId(globalMetaId string) string {
 	globalMetaId = strings.TrimSpace(globalMetaId)
-	if len(globalMetaId) <= 12 {
+	if len(globalMetaId) <= 16 {
 		return globalMetaId
 	}
-	return globalMetaId[:6] + "..." + globalMetaId[len(globalMetaId)-4:]
+	return globalMetaId[:8] + "..." + globalMetaId[len(globalMetaId)-6:]
 }

@@ -25,7 +25,6 @@ type CanonicalIdentity struct {
 
 type Profile struct {
 	Name            string `json:"name"`
-	NamePinId       string `json:"namePinId,omitempty"`
 	Avatar          string `json:"avatar"`
 	AvatarPinId     string `json:"avatarPinId,omitempty"`
 	Background      string `json:"background"`
@@ -46,91 +45,90 @@ type Homepage struct {
 }
 
 type CustomHomepage struct {
-	Title       string   `json:"title,omitempty"`
-	Summary     string   `json:"summary,omitempty"`
-	HeroImage   string   `json:"heroImage,omitempty"`
-	Sections    []string `json:"sections,omitempty"`
-	UpdatedAt   *int64   `json:"updatedAt,omitempty"`
-	SourcePinId string   `json:"sourcePinId,omitempty"`
+	URI          string `json:"uri"`
+	PinId        string `json:"pinId"`
+	ContentType  string `json:"contentType"`
+	Renderer     string `json:"renderer"`
+	Txid         string `json:"txid,omitempty"`
+	ProtocolPath string `json:"protocolPath"`
 }
 
 type Presence struct {
 	State     string `json:"state"`
 	UpdatedAt *int64 `json:"updatedAt"`
+	Source    string `json:"source"`
 }
 
 type Service struct {
-	Id                   string  `json:"id"`
-	CurrentPinId         string  `json:"currentPinId"`
-	SourceServicePinId   string  `json:"sourceServicePinId"`
-	ServiceName          string  `json:"serviceName"`
-	DisplayName          string  `json:"displayName"`
-	Description          string  `json:"description"`
-	ServiceIcon          string  `json:"serviceIcon"`
-	ProviderSkill        string  `json:"providerSkill"`
-	OutputType           string  `json:"outputType"`
-	Price                string  `json:"price"`
-	Currency             string  `json:"currency"`
-	SettlementKind       string  `json:"settlementKind"`
-	PaymentChain         string  `json:"paymentChain"`
-	MRC20Ticker          any     `json:"mrc20Ticker"`
-	MRC20Id              any     `json:"mrc20Id"`
-	PaymentAddress       string  `json:"paymentAddress"`
-	ProviderMetaId       string  `json:"providerMetaId"`
-	ProviderGlobalMetaId string  `json:"providerGlobalMetaId"`
-	ProviderAddress      string  `json:"providerAddress"`
-	ProviderName         string  `json:"providerName"`
-	ProviderAvatar       string  `json:"providerAvatar"`
-	ProviderAvatarId     string  `json:"providerAvatarId,omitempty"`
-	ProviderChatPubkey   string  `json:"providerChatPubkey"`
-	RatingAvg            float64 `json:"ratingAvg"`
-	RatingCount          int64   `json:"ratingCount"`
-	Status               int     `json:"status"`
-	Operation            string  `json:"operation"`
-	Disabled             bool    `json:"disabled"`
-	ChainName            string  `json:"chainName"`
-	CreatedAt            int64   `json:"createdAt"`
-	UpdatedAt            int64   `json:"updatedAt"`
+	Id                 string        `json:"id"`
+	CurrentPinId       string        `json:"currentPinId"`
+	SourceServicePinId string        `json:"sourceServicePinId"`
+	DisplayName        string        `json:"displayName"`
+	ServiceName        string        `json:"serviceName"`
+	Description        string        `json:"description"`
+	ServiceIcon        string        `json:"serviceIcon"`
+	ProviderSkill      string        `json:"providerSkill"`
+	OutputType         string        `json:"outputType"`
+	Price              string        `json:"price"`
+	Currency           string        `json:"currency"`
+	SettlementKind     string        `json:"settlementKind"`
+	PaymentChain       string        `json:"paymentChain"`
+	MRC20Ticker        any           `json:"mrc20Ticker"`
+	MRC20Id            any           `json:"mrc20Id"`
+	PaymentAddress     string        `json:"paymentAddress"`
+	RatingAvg          float64       `json:"ratingAvg"`
+	RatingCount        int64         `json:"ratingCount"`
+	Status             int           `json:"status"`
+	Operation          string        `json:"operation"`
+	Disabled           bool          `json:"disabled"`
+	ChainName          string        `json:"chainName"`
+	CreatedAt          int64         `json:"createdAt"`
+	UpdatedAt          int64         `json:"updatedAt"`
+	Proof              *ServiceProof `json:"proof,omitempty"`
 }
 
 type Action struct {
-	Kind    string `json:"kind"`
-	Label   string `json:"label"`
-	Enabled bool   `json:"enabled"`
-	URI     string `json:"uri,omitempty"`
+	Id                    string `json:"id"`
+	Label                 string `json:"label"`
+	Kind                  string `json:"kind"`
+	Enabled               bool   `json:"enabled"`
+	RequiresUsingIdentity bool   `json:"requiresUsingIdentity"`
+	URI                   string `json:"uri,omitempty"`
 }
 
 type Proofs struct {
 	VerificationState string         `json:"verificationState"`
-	Summary           ProofSummary   `json:"summary"`
+	Identity          *ProofSummary  `json:"identity"`
 	Profile           []ProfileProof `json:"profile"`
+	Homepage          *ProofSummary  `json:"homepage"`
 	Services          []ServiceProof `json:"services"`
 }
 
 type ProofSummary struct {
-	ProfileCount int    `json:"profileCount"`
-	ServiceCount int    `json:"serviceCount"`
-	ExplorerURL  string `json:"explorerUrl,omitempty"`
+	Txid                  string `json:"txid,omitempty"`
+	PinId                 string `json:"pinId,omitempty"`
+	ProtocolPath          string `json:"protocolPath"`
+	PublisherGlobalMetaId string `json:"publisherGlobalMetaId,omitempty"`
+	ContentHash           string `json:"contentHash,omitempty"`
+	ExplorerURL           string `json:"explorerUrl,omitempty"`
 }
 
 type ProfileProof struct {
 	Field                 string `json:"field"`
+	Txid                  string `json:"txid,omitempty"`
+	PinId                 string `json:"pinId,omitempty"`
 	ProtocolPath          string `json:"protocolPath"`
-	PinId                 string `json:"pinId"`
-	TxId                  string `json:"txid,omitempty"`
 	ContentHash           string `json:"contentHash,omitempty"`
-	PublisherGlobalMetaId string `json:"publisherGlobalMetaId"`
-	ExplorerURL           string `json:"explorerUrl,omitempty"`
+	PublisherGlobalMetaId string `json:"publisherGlobalMetaId,omitempty"`
 }
 
 type ServiceProof struct {
-	ServiceId             string `json:"serviceId"`
-	ProtocolPath          string `json:"protocolPath"`
+	ServiceId             string `json:"serviceId,omitempty"`
+	Txid                  string `json:"txid,omitempty"`
 	PinId                 string `json:"pinId"`
-	TxId                  string `json:"txid,omitempty"`
-	ContentHash           string `json:"contentHash,omitempty"`
+	SourceServicePinId    string `json:"sourceServicePinId,omitempty"`
+	ProtocolPath          string `json:"protocolPath"`
 	PublisherGlobalMetaId string `json:"publisherGlobalMetaId"`
-	ExplorerURL           string `json:"explorerUrl,omitempty"`
 }
 
 type Source struct {
