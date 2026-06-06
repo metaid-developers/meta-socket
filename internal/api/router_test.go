@@ -13,9 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 	"github.com/metaid-developers/metaso-p2p/internal/api"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -36,10 +38,13 @@ func setupFullRouter(t *testing.T) *gin.Engine {
 }
 
 type fullRouterFixture struct {
-	router     *gin.Engine
-	store      *storage.PebbleStore
-	groupAgg   *groupchat.Aggregator
-	privateAgg *privatechat.Aggregator
+	router         *gin.Engine
+	store          *storage.PebbleStore
+	userAgg        *userinfo.Aggregator
+	groupAgg       *groupchat.Aggregator
+	privateAgg     *privatechat.Aggregator
+	botHomepageAgg *bothomepage.Aggregator
+	skillAgg       *skillservice.Aggregator
 }
 
 func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
@@ -53,7 +58,8 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	if err := reg.Register(&notify.Aggregator{}); err != nil {
 		t.Fatalf("register notify: %v", err)
 	}
-	if err := reg.Register(&userinfo.Aggregator{}); err != nil {
+	userAgg := &userinfo.Aggregator{}
+	if err := reg.Register(userAgg); err != nil {
 		t.Fatalf("register userinfo: %v", err)
 	}
 	groupAgg := &groupchat.Aggregator{}
@@ -64,14 +70,32 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	if err := reg.Register(privateAgg); err != nil {
 		t.Fatalf("register privatechat: %v", err)
 	}
+	skillAgg := &skillservice.Aggregator{}
+	if err := reg.Register(skillAgg); err != nil {
+		t.Fatalf("register skillservice: %v", err)
+	}
+	botHomepageAgg := &bothomepage.Aggregator{}
+	if err := reg.Register(botHomepageAgg); err != nil {
+		t.Fatalf("register bothomepage: %v", err)
+	}
+
+	skillAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userAgg))
+	skillAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
+	botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userAgg))
+	botHomepageAgg.SetServiceLister(skillAgg)
+	botHomepageAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
+	privateAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userAgg))
 
 	cfg := config.Default()
 	// SetupRouter handles nil socketServer gracefully (Socket.IO routes skipped).
 	return &fullRouterFixture{
-		router:     api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test"),
-		store:      store,
-		groupAgg:   groupAgg,
-		privateAgg: privateAgg,
+		router:         api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test"),
+		store:          store,
+		userAgg:        userAgg,
+		groupAgg:       groupAgg,
+		privateAgg:     privateAgg,
+		botHomepageAgg: botHomepageAgg,
+		skillAgg:       skillAgg,
 	}
 }
 
@@ -321,6 +345,66 @@ func TestRouter_AggregatorRegistrationDoesNotPanic(t *testing.T) {
 		}
 	}()
 	_ = setupFullRouter(t)
+}
+
+func TestRouter_BotHomepageGlobalMetaIDAcceptance(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+
+	if _, err := fixture.botHomepageAgg.HandleBlockPin(nil); err != nil {
+		t.Fatalf("HandleBlockPin(nil): %v", err)
+	}
+
+	if _, err := fixture.userAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:        "init-bot:i0",
+		Path:      "/",
+		MetaId:    "bot-meta",
+		Address:   "18BotHomepage",
+		ChainName: "mvc",
+	}); err != nil {
+		t.Fatalf("HandleBlockPin(user init): %v", err)
+	}
+	if _, err := fixture.userAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:          "name-bot:i0",
+		Path:        "/info/name",
+		MetaId:      "bot-meta",
+		Address:     "18BotHomepage",
+		ChainName:   "mvc",
+		ContentBody: []byte("Homepage Bot"),
+	}); err != nil {
+		t.Fatalf("HandleBlockPin(user name): %v", err)
+	}
+
+	profile, err := fixture.userAgg.LookupByMetaId("bot-meta")
+	if err != nil {
+		t.Fatalf("LookupByMetaId: %v", err)
+	}
+	if profile == nil {
+		t.Fatalf("LookupByMetaId returned nil")
+	}
+	if profile.GlobalMetaID == "" {
+		// The synthetic 18BotHomepage address is not ID-address encodable.
+		profile.GlobalMetaID = "idq1bothomepageacceptance"
+		if err := fixture.store.Set("userinfo", []byte("profile:"+profile.MetaID), mustMarshalJSON(t, profile)); err != nil {
+			t.Fatalf("seed profile globalMetaId: %v", err)
+		}
+		profile, err = fixture.userAgg.LookupByMetaId("bot-meta")
+		if err != nil {
+			t.Fatalf("LookupByMetaId after globalMetaId seed: %v", err)
+		}
+		if profile == nil || profile.GlobalMetaID == "" {
+			t.Fatalf("profile globalMetaId should be seeded, got %#v", profile)
+		}
+	}
+
+	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/"+profile.GlobalMetaID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want HTTP 200 got %d body=%s", w.Code, w.Body.String())
+	}
+
+	data := assertResponseDataKeys(t, body, "schemaVersion", "canonical", "profile", "homepage", "services", "actions", "proofs", "source", "warnings")
+	if data["schemaVersion"] != "botHomepage.v1" {
+		t.Fatalf("schemaVersion: want botHomepage.v1 got %v data=%v", data["schemaVersion"], data)
+	}
 }
 
 // TestRouter_PrivateChatRoutesHandledByPrivateChat verifies the four
