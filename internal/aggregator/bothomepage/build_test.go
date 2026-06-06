@@ -31,6 +31,17 @@ func (f *fakeServiceLister) List(params skillservice.ListParams) (*skillservice.
 	return f.result, f.err
 }
 
+type recordingServiceLister struct {
+	gotParams skillservice.ListParams
+	result    *skillservice.ListResult
+	err       error
+}
+
+func (r *recordingServiceLister) List(params skillservice.ListParams) (*skillservice.ListResult, error) {
+	r.gotParams = params
+	return r.result, r.err
+}
+
 func TestBuildUserInfoLookupUnavailable(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -207,6 +218,170 @@ func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
 	}
 	if got.Source.Stale {
 		t.Fatal("Source.Stale = true, want false")
+	}
+}
+
+func TestBuildHomepageIncludesProviderServices(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.now = func() int64 { return 1780760000000 }
+	agg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:    "idqBot",
+		MetaId:          "metaBot",
+		Address:         "1BotAddress",
+		Name:            "IDQ Bot",
+		ChatPublicKey:   "02chatpubkey",
+		ChatPublicKeyId: "chat-pin:i0",
+		ChainName:       "mvc",
+	}})
+
+	lister := &recordingServiceLister{result: &skillservice.ListResult{List: []skillservice.ServiceListItem{{
+		Id:                 "svc-1",
+		CurrentPinId:       "svc-pin:i0",
+		SourceServicePinId: "source-svc-pin:i0",
+		DisplayName:        "Question Answering",
+		ServiceName:        "qa",
+		Description:        "Answers questions from chain context.",
+		ServiceIcon:        "metafile://service-icon",
+		ProviderSkill:      "qa-skill",
+		OutputType:         "text",
+		Price:              "0.1",
+		Currency:           "SPACE",
+		SettlementKind:     "prepaid",
+		PaymentChain:       "mvc",
+		MRC20Ticker:        "SPACE",
+		MRC20Id:            "space-token-id",
+		PaymentAddress:     "1PayAddress",
+		RatingAvg:          4.7,
+		RatingCount:        12,
+		Status:             1,
+		Operation:          "create",
+		Disabled:           false,
+		ChainName:          "mvc",
+		CreatedAt:          1780750000000,
+		UpdatedAt:          1780755000000,
+	}}}}
+	agg.SetServiceLister(lister)
+
+	opts := DefaultOptions()
+	opts.ServiceSize = 7
+	opts.IncludeInactiveServices = true
+	opts.ChainName = "mvc"
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if lister.gotParams.ProviderGlobalMetaId != "idqBot" {
+		t.Fatalf("ProviderGlobalMetaId = %q, want idqBot", lister.gotParams.ProviderGlobalMetaId)
+	}
+	if lister.gotParams.Size != 7 {
+		t.Fatalf("Size = %d, want 7", lister.gotParams.Size)
+	}
+	if !lister.gotParams.IncludeInactive {
+		t.Fatal("IncludeInactive = false, want true")
+	}
+	if lister.gotParams.ChainName != "mvc" {
+		t.Fatalf("ChainName = %q, want mvc", lister.gotParams.ChainName)
+	}
+
+	if len(got.Services) != 1 {
+		t.Fatalf("Services length = %d, want 1", len(got.Services))
+	}
+	service := got.Services[0]
+	if service.Id != "svc-1" || service.DisplayName != "Question Answering" || service.ProviderSkill != "qa-skill" {
+		t.Fatalf("service mapping = %+v", service)
+	}
+	if service.Proof == nil {
+		t.Fatal("service.Proof = nil, want proof")
+	}
+	if service.Proof.ProtocolPath != skillservice.PathSkillService {
+		t.Fatalf("service proof ProtocolPath = %q, want %q", service.Proof.ProtocolPath, skillservice.PathSkillService)
+	}
+	if !got.Actions[1].Enabled {
+		t.Fatalf("services action = %+v, want enabled", got.Actions[1])
+	}
+	if len(got.Proofs.Services) != 1 {
+		t.Fatalf("Proofs.Services length = %d, want 1", len(got.Proofs.Services))
+	}
+}
+
+func TestBuildHomepageSkipsServicesWhenDisabled(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:  "idqBot",
+		Name:          "IDQ Bot",
+		ChatPublicKey: "02chatpubkey",
+	}})
+	lister := &recordingServiceLister{result: &skillservice.ListResult{List: []skillservice.ServiceListItem{{
+		Id: "svc-1",
+	}}}}
+	agg.SetServiceLister(lister)
+
+	opts := DefaultOptions()
+	opts.IncludeServices = false
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if lister.gotParams != (skillservice.ListParams{}) {
+		t.Fatalf("service lister params = %+v, want zero value", lister.gotParams)
+	}
+	if len(got.Services) != 0 {
+		t.Fatalf("Services length = %d, want 0", len(got.Services))
+	}
+}
+
+func TestBuildHomepageSuppressesProofsWhenDisabled(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:    "idqBot",
+		Name:            "IDQ Bot",
+		NameId:          "name-pin:i0",
+		ChatPublicKey:   "02chatpubkey",
+		ChatPublicKeyId: "chat-pin:i0",
+	}})
+	lister := &recordingServiceLister{result: &skillservice.ListResult{List: []skillservice.ServiceListItem{{
+		Id:                 "svc-1",
+		CurrentPinId:       "svc-pin:i0",
+		SourceServicePinId: "source-svc-pin:i0",
+		DisplayName:        "Question Answering",
+		ServiceName:        "qa",
+	}}}}
+	agg.SetServiceLister(lister)
+
+	opts := DefaultOptions()
+	opts.IncludeProofs = false
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if len(got.Proofs.Profile) != 0 {
+		t.Fatalf("Proofs.Profile length = %d, want 0", len(got.Proofs.Profile))
+	}
+	if len(got.Proofs.Services) != 0 {
+		t.Fatalf("Proofs.Services length = %d, want 0", len(got.Proofs.Services))
+	}
+	if len(got.Services) != 1 {
+		t.Fatalf("Services length = %d, want 1", len(got.Services))
+	}
+	if got.Services[0].Proof != nil {
+		t.Fatalf("service Proof = %+v, want nil", got.Services[0].Proof)
+	}
+	if len(got.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want empty", got.Warnings)
 	}
 }
 

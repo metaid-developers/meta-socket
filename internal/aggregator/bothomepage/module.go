@@ -24,6 +24,7 @@ type Aggregator struct {
 	notifyCh      chan *aggregator.NotifyEvent
 	now           func() int64
 	profileLookup ProfileLookup
+	serviceLister ServiceLister
 	assetResolver *skillservice.AssetResolver
 	assetBaseURL  string
 }
@@ -48,6 +49,10 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 
 func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 	a.profileLookup = lookup
+}
+
+func (a *Aggregator) SetServiceLister(lister ServiceLister) {
+	a.serviceLister = lister
 }
 
 func (a *Aggregator) SetAssetBaseURL(baseURL string) {
