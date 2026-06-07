@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
@@ -24,6 +25,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/config"
 	"github.com/metaid-developers/metaso-p2p/internal/federation"
 	"github.com/metaid-developers/metaso-p2p/internal/indexer"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 	"github.com/metaid-developers/metaso-p2p/internal/socket"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
@@ -55,6 +57,7 @@ func main() {
 	// --- Aggregator registry ---
 	var aggRegistry *aggregator.Registry
 	var userinfoAgg *userinfo.Aggregator
+	var botHomepageAgg *bothomepage.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
@@ -76,6 +79,10 @@ func main() {
 		if err := aggRegistry.Register(skillserviceAgg); err != nil {
 			log.Printf("WARNING: skillservice aggregator init failed: %v", err)
 		}
+		botHomepageAgg = &bothomepage.Aggregator{}
+		if err := aggRegistry.Register(botHomepageAgg); err != nil {
+			log.Printf("WARNING: bothomepage aggregator init failed: %v", err)
+		}
 		// Wire skillservice → userinfo for provider profile resolution.
 		// skillservice itself stays decoupled from remote profile services;
 		// userinfo owns any configured local-first profile completion.
@@ -86,6 +93,9 @@ func main() {
 		// value comes from METASO_P2P_ASSET_BASE_URL (default in
 		// config.Default mirrors the documented recommendation).
 		skillserviceAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
+		botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userinfoAgg))
+		botHomepageAgg.SetServiceLister(skillserviceAgg)
+		botHomepageAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
 
@@ -174,6 +184,14 @@ func main() {
 		socketServer.SetSnapshotProvider(federationService.SnapshotProvider())
 		socketServer.SetGlobalReader(federationService.GlobalReader())
 		log.Printf("federation service: node_id=%s", federationService.NodeID())
+	}
+
+	if botHomepageAgg != nil && socketServer != nil {
+		var globalReader presence.GlobalReader
+		if federationService != nil {
+			globalReader = federationService.GlobalReader()
+		}
+		botHomepageAgg.SetPresenceReaders(socketServer.Manager(), globalReader)
 	}
 
 	// --- HTTP router ---

@@ -336,6 +336,49 @@ func TestHandleBlockPin_InvalidatesCache(t *testing.T) {
 	t.Logf("cache invalidation test: old=%q new=%q", resp1.Data.Name, resp2.Data.Name)
 }
 
+func TestHandleBlockPin_BackgroundStoresPinId(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	initPin := &aggregator.PinInscription{
+		Path:      "/",
+		Operation: "init",
+		MetaId:    "bg-user",
+		Address:   "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+		ChainName: "btc",
+		Id:        "background-init:i0",
+	}
+	if _, err := agg.HandleBlockPin(initPin); err != nil {
+		t.Fatalf("HandleBlockPin(init) failed: %v", err)
+	}
+
+	backgroundPin := &aggregator.PinInscription{
+		Path:      "/info/background",
+		Operation: "create",
+		MetaId:    "bg-user",
+		Address:   "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+		ChainName: "btc",
+		Id:        "background-pin:i0",
+	}
+	if _, err := agg.HandleBlockPin(backgroundPin); err != nil {
+		t.Fatalf("HandleBlockPin(background) failed: %v", err)
+	}
+
+	profile, err := agg.LookupByMetaId("bg-user")
+	if err != nil {
+		t.Fatalf("LookupByMetaId returned error: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("LookupByMetaId returned nil profile")
+	}
+	if profile.Background != "/content/background-pin:i0" {
+		t.Fatalf("Background = %q, want /content/background-pin:i0", profile.Background)
+	}
+	if profile.BackgroundId != "background-pin:i0" {
+		t.Fatalf("BackgroundId = %q, want background-pin:i0", profile.BackgroundId)
+	}
+}
+
 // TestHandleAddressInfo tests the /api/info/address/:address endpoint.
 func TestHandleAddressInfo(t *testing.T) {
 	agg, store, router := setupTestAggregator(t)
