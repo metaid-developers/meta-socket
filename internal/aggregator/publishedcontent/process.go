@@ -37,6 +37,20 @@ func (a *Aggregator) processCreate(pin *aggregator.PinInscription, protocolPath 
 	rec := newRecordFromPin(pin, protocolPath, pin.Id, isMempool)
 	if existing != nil {
 		if !isMempool && existing.IsMempool {
+			if existing.CurrentPinId != existing.SourcePinId && existing.CurrentPinId != pin.Id {
+				rec.CurrentPinId = existing.CurrentPinId
+				rec.CurrentNumber = existing.CurrentNumber
+				rec.CurrentPath = existing.CurrentPath
+				rec.CurrentHost = existing.CurrentHost
+				rec.Operation = existing.Operation
+				rec.Hidden = existing.Hidden
+				rec.IsMempool = true
+				rec.ContentType = existing.ContentType
+				rec.PayloadText = existing.PayloadText
+				rec.PayloadJSON = existing.PayloadJSON
+				rec.PayloadExposed = existing.PayloadExposed
+				rec.UpdatedAt = existing.UpdatedAt
+			}
 			return a.saveRecord(rec, existing)
 		}
 		return nil

@@ -236,6 +236,102 @@ func TestMempoolCreateIsUpgradedByConfirmedBlockPin(t *testing.T) {
 	}
 }
 
+func TestConfirmedCreatePreservesPendingMempoolModify(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcessMempool(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "source:i0",
+		Operation:    OperationCreate,
+		Timestamp:    100,
+		Number:       11,
+		ContentBody:  []byte("source mempool"),
+		GlobalMetaId: "gid-old",
+		MetaId:       "meta-old",
+		Address:      "addr-old",
+		Host:         "mempool-host",
+	}))
+	mustProcessMempool(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "modify:i0",
+		Path:         PathSimpleBuzz + "@source:i0",
+		Operation:    OperationModify,
+		Timestamp:    300,
+		Number:       33,
+		ContentBody:  []byte("pending modify"),
+		GlobalMetaId: "gid-pending",
+		MetaId:       "meta-pending",
+		Address:      "addr-pending",
+		Host:         "modify-host",
+	}))
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "source:i0",
+		Operation:    OperationCreate,
+		Timestamp:    200,
+		Number:       22,
+		ContentBody:  []byte("source confirmed"),
+		GlobalMetaId: "gid-new",
+		MetaId:       "meta-new",
+		Address:      "addr-new",
+		Host:         "block-host",
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathSimpleBuzz, "source:i0")
+	if rec.CurrentPinId != "modify:i0" {
+		t.Fatalf("confirmed source replay should preserve pending current pin, got %q", rec.CurrentPinId)
+	}
+	if !rec.IsMempool {
+		t.Fatal("pending modify should keep record in mempool state")
+	}
+	if rec.Operation != OperationModify || rec.Hidden {
+		t.Fatalf("pending modify state not preserved: operation=%q hidden=%v", rec.Operation, rec.Hidden)
+	}
+	if rec.PayloadText != "pending modify" {
+		t.Fatalf("pending modify payload not preserved: got %q", rec.PayloadText)
+	}
+	if rec.CreatedAt != 200 || rec.UpdatedAt != 300 {
+		t.Fatalf("timestamps: createdAt=%d updatedAt=%d", rec.CreatedAt, rec.UpdatedAt)
+	}
+	if rec.SourceNumber != 22 || rec.SourceHost != "block-host" {
+		t.Fatalf("source metadata not upgraded: number=%d host=%q", rec.SourceNumber, rec.SourceHost)
+	}
+	if rec.CurrentNumber != 33 || rec.CurrentPath != PathSimpleBuzz+"@source:i0" || rec.CurrentHost != "modify-host" {
+		t.Fatalf("current metadata not preserved: number=%d path=%q host=%q", rec.CurrentNumber, rec.CurrentPath, rec.CurrentHost)
+	}
+	if rec.PublisherGlobalMetaId != "gid-new" || rec.PublisherMetaId != "meta-new" || rec.PublisherAddress != "addr-new" {
+		t.Fatalf("confirmed source identity not applied: global=%q meta=%q address=%q", rec.PublisherGlobalMetaId, rec.PublisherMetaId, rec.PublisherAddress)
+	}
+
+	pendingIdentity, err := agg.List(ListParams{
+		ProtocolPath:          PathSimpleBuzz,
+		PublisherGlobalMetaId: "gid-pending",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List pending identity: %v", err)
+	}
+	if len(pendingIdentity.Items) != 0 {
+		t.Fatalf("pending modify identity index should not list confirmed source record, got %d item(s)", len(pendingIdentity.Items))
+	}
+
+	confirmedIdentity, err := agg.List(ListParams{
+		ProtocolPath:          PathSimpleBuzz,
+		PublisherGlobalMetaId: "gid-new",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List confirmed identity: %v", err)
+	}
+	if len(confirmedIdentity.Items) != 1 {
+		t.Fatalf("confirmed identity index should list preserved pending record, got %d item(s)", len(confirmedIdentity.Items))
+	}
+	if confirmedIdentity.Items[0].SourcePinId != "source:i0" || confirmedIdentity.Items[0].CurrentPinId != "modify:i0" {
+		t.Fatalf("confirmed identity item mismatch: %+v", confirmedIdentity.Items[0])
+	}
+	if confirmedIdentity.Items[0].PayloadText != "pending modify" || !confirmedIdentity.Items[0].IsMempool {
+		t.Fatalf("confirmed identity item should expose pending modify state: %+v", confirmedIdentity.Items[0])
+	}
+}
+
 func TestPayloadFallsBackToContentSummary(t *testing.T) {
 	agg, store := setupTestAggregator(t)
 	defer store.Close()
