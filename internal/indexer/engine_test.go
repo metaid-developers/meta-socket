@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -168,6 +169,127 @@ func TestEngineMempoolPollDeduplicatesTransactionIDs(t *testing.T) {
 	got := recorder.MempoolPins()
 	if len(got) != 1 {
 		t.Fatalf("expected duplicate txID to route once, got %d pins", len(got))
+	}
+}
+
+func TestEngineMempoolDedupesByPinIdentityWhenTxIDsAreUnaligned(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	registry := aggregator.NewRegistry(store, nil)
+	recorder := &recordingRegistryAggregator{}
+	if err := registry.Register(recorder); err != nil {
+		t.Fatalf("Register recorder failed: %v", err)
+	}
+	engine := NewEngine(store, registry)
+
+	chain := &mockChain{name: "mvc", mempoolTxList: []any{"raw1", "raw2"}}
+	pinA := &aggregator.PinInscription{
+		Id:           "txAi0",
+		Path:         "/protocols/simplebuzz",
+		Operation:    "create",
+		ChainName:    "mvc",
+		GlobalMetaId: "idq1",
+		MetaId:       "meta1",
+		Address:      "addr1",
+		ContentBody:  []byte(`{"content":"hello a"}`),
+	}
+	pinB := &aggregator.PinInscription{
+		Id:           "txBi0",
+		Path:         "/protocols/simplebuzz",
+		Operation:    "create",
+		ChainName:    "mvc",
+		GlobalMetaId: "idq2",
+		MetaId:       "meta2",
+		Address:      "addr2",
+		ContentBody:  []byte(`{"content":"hello b"}`),
+	}
+	idx := &mockIndexer{
+		name:         "mvc",
+		mempoolPins:  []*aggregator.PinInscription{pinA, pinB},
+		mempoolTxIDs: []string{"spent1:0", "spent2:0"},
+	}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+
+	engine.pollMempoolOnce()
+	idx.mempoolTxIDs = []string{"spent3:0"}
+	engine.pollMempoolOnce()
+
+	got := recorder.MempoolPins()
+	if len(got) != 2 {
+		t.Fatalf("expected each stable pin identity to route once, got %d pins", len(got))
+	}
+	if got[0] != pinA || got[1] != pinB {
+		t.Fatalf("expected routed pins [pinA pinB], got [%p %p]", got[0], got[1])
+	}
+}
+
+func TestEngineMempoolDeduplicatesWithoutReturnedTxIDs(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	registry := aggregator.NewRegistry(store, nil)
+	recorder := &recordingRegistryAggregator{}
+	if err := registry.Register(recorder); err != nil {
+		t.Fatalf("Register recorder failed: %v", err)
+	}
+	engine := NewEngine(store, registry)
+
+	chain := &mockChain{name: "mvc", mempoolTxList: []any{"raw1"}}
+	pin := &aggregator.PinInscription{
+		Id:           "tx1i0",
+		Path:         "/protocols/simplebuzz",
+		Operation:    "create",
+		ChainName:    "mvc",
+		GlobalMetaId: "idq1",
+		MetaId:       "meta1",
+		Address:      "addr1",
+		ContentBody:  []byte(`{"content":"hello"}`),
+	}
+	idx := &mockIndexer{
+		name:         "mvc",
+		mempoolPins:  []*aggregator.PinInscription{pin},
+		mempoolTxIDs: nil,
+	}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+
+	engine.pollMempoolOnce()
+	engine.pollMempoolOnce()
+
+	got := recorder.MempoolPins()
+	if len(got) != 1 {
+		t.Fatalf("expected pin without returned txIDs to route once, got %d pins", len(got))
+	}
+	if got[0] != pin {
+		t.Fatalf("expected routed pin pointer %p, got %p", pin, got[0])
+	}
+}
+
+func TestEngineMempoolDedupeTTLAllowsRefresh(t *testing.T) {
+	engine := NewEngine(nil, nil)
+	engine.ConfigureMempoolPolling(true, time.Second, time.Second)
+	pin := &aggregator.PinInscription{
+		Id:        "tx1i0",
+		ChainName: "mvc",
+	}
+
+	first := engine.filterSeenMempoolPins("mvc", []*aggregator.PinInscription{pin}, nil, time.Unix(100, 0))
+	if len(first) != 1 {
+		t.Fatalf("expected first pin to pass dedupe, got %d pins", len(first))
+	}
+
+	withinTTL := engine.filterSeenMempoolPins("mvc", []*aggregator.PinInscription{pin}, nil, time.Unix(100, int64(500*time.Millisecond)))
+	if len(withinTTL) != 0 {
+		t.Fatalf("expected duplicate within TTL to be suppressed, got %d pins", len(withinTTL))
+	}
+
+	afterTTL := engine.filterSeenMempoolPins("mvc", []*aggregator.PinInscription{pin}, nil, time.Unix(102, 0))
+	if len(afterTTL) != 1 {
+		t.Fatalf("expected pin after TTL to pass dedupe, got %d pins", len(afterTTL))
 	}
 }
 

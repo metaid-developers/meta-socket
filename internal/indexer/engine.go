@@ -265,9 +265,7 @@ func (e *Engine) pollMempoolOnce() {
 			log.Printf("[indexer] %s mempool: CatchMempoolPins error: %v", chainName, err)
 			continue
 		}
-		if len(txIDs) > 0 {
-			pins = e.filterSeenMempoolPins(chainName, pins, txIDs, now)
-		}
+		pins = e.filterSeenMempoolPins(chainName, pins, txIDs, now)
 
 		for _, pin := range pins {
 			e.registry.RouteMempoolPin(pin)
@@ -287,17 +285,17 @@ func (e *Engine) filterSeenMempoolPins(chainName string, pins []*aggregator.PinI
 
 	filtered := make([]*aggregator.PinInscription, 0, len(pins))
 	newKeys := make(map[string]time.Time)
-	for i, pin := range pins {
+	for _, pin := range pins {
 		if pin == nil {
 			continue
 		}
-		txID := mempoolTxIDForPin(i, pin, txIDs)
-		if txID == "" {
+		stableID := mempoolStableIDForPin(pin, txIDs)
+		if stableID == "" {
 			filtered = append(filtered, pin)
 			continue
 		}
 
-		key := chainName + ":" + txID
+		key := chainName + ":" + stableID
 		if seenAt, ok := e.mempoolSeen[key]; ok && (e.mempoolDedupeTTL <= 0 || now.Sub(seenAt) <= e.mempoolDedupeTTL) {
 			continue
 		}
@@ -310,16 +308,43 @@ func (e *Engine) filterSeenMempoolPins(chainName string, pins []*aggregator.PinI
 	return filtered
 }
 
-func mempoolTxIDForPin(index int, pin *aggregator.PinInscription, txIDs []string) string {
-	if index < len(txIDs) {
-		return txIDs[index]
+func mempoolStableIDForPin(pin *aggregator.PinInscription, txIDs []string) string {
+	if pin == nil {
+		return ""
+	}
+	if genesisTx := strings.TrimSpace(pin.GenesisTransaction); genesisTx != "" {
+		return genesisTx
+	}
+	pinID := strings.TrimSpace(pin.Id)
+	if txID := mempoolTxIDFromPinID(pinID); txID != "" {
+		return txID
 	}
 	for _, txID := range txIDs {
-		if txID != "" && (pin.Id == txID || strings.HasPrefix(pin.Id, txID+"i")) {
+		txID = strings.TrimSpace(txID)
+		if txID != "" && (pinID == txID || strings.HasPrefix(pinID, txID+"i") || strings.HasPrefix(pinID, txID+":")) {
 			return txID
 		}
 	}
-	return ""
+	return pinID
+}
+
+func mempoolTxIDFromPinID(pinID string) string {
+	if pinID == "" {
+		return ""
+	}
+	if separator := strings.Index(pinID, ":"); separator > 0 {
+		return strings.TrimSpace(pinID[:separator])
+	}
+	suffixStart := strings.LastIndex(pinID, "i")
+	if suffixStart <= 0 || suffixStart == len(pinID)-1 {
+		return ""
+	}
+	for _, r := range pinID[suffixStart+1:] {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return strings.TrimSpace(pinID[:suffixStart])
 }
 
 // persistHeight saves the last processed height to Pebble.
