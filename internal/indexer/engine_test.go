@@ -172,6 +172,60 @@ func TestEngineMempoolPollDeduplicatesTransactionIDs(t *testing.T) {
 	}
 }
 
+func TestEngineMempoolDeduplicatesDuplicatePinsInSamePoll(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	registry := aggregator.NewRegistry(store, nil)
+	recorder := &recordingRegistryAggregator{}
+	if err := registry.Register(recorder); err != nil {
+		t.Fatalf("Register recorder failed: %v", err)
+	}
+	engine := NewEngine(store, registry)
+
+	chain := &mockChain{name: "mvc", mempoolTxList: []any{"tx1", "tx1-duplicate"}}
+	pinA := &aggregator.PinInscription{
+		Id:                 "tx1i0",
+		GenesisTransaction: "tx1",
+		Path:               "/protocols/simplebuzz",
+		Operation:          "create",
+		ChainName:          "mvc",
+		GlobalMetaId:       "idq1",
+		MetaId:             "meta1",
+		Address:            "addr1",
+		ContentBody:        []byte(`{"content":"hello"}`),
+	}
+	pinB := &aggregator.PinInscription{
+		Id:                 "tx1i0",
+		GenesisTransaction: "tx1",
+		Path:               "/protocols/simplebuzz",
+		Operation:          "create",
+		ChainName:          "mvc",
+		GlobalMetaId:       "idq1",
+		MetaId:             "meta1",
+		Address:            "addr1",
+		ContentBody:        []byte(`{"content":"hello duplicate"}`),
+	}
+	idx := &mockIndexer{
+		name:         "mvc",
+		mempoolPins:  []*aggregator.PinInscription{pinA, pinB},
+		mempoolTxIDs: []string{"tx1", "tx1"},
+	}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+
+	engine.pollMempoolOnce()
+
+	got := recorder.MempoolPins()
+	if len(got) != 1 {
+		t.Fatalf("expected duplicate stable pin identity in one poll to route once, got %d pins", len(got))
+	}
+	if got[0] != pinA {
+		t.Fatalf("expected first duplicate pin pointer %p to route, got %p", pinA, got[0])
+	}
+}
+
 func TestEngineMempoolDedupesByPinIdentityWhenTxIDsAreUnaligned(t *testing.T) {
 	store := storage.NewPebbleStore(t.TempDir())
 	defer store.Close()

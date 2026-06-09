@@ -299,6 +299,9 @@ func (e *Engine) filterSeenMempoolPins(chainName string, pins []*aggregator.PinI
 		if seenAt, ok := e.mempoolSeen[key]; ok && (e.mempoolDedupeTTL <= 0 || now.Sub(seenAt) <= e.mempoolDedupeTTL) {
 			continue
 		}
+		if _, ok := newKeys[key]; ok {
+			continue
+		}
 		newKeys[key] = now
 		filtered = append(filtered, pin)
 	}
