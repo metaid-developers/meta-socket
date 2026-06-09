@@ -50,9 +50,10 @@ git switch codex/bot-homepage-v2
 - Modify `internal/indexer/engine_test.go`: cover mempool polling, duplicate suppression, and route behavior.
 - Modify `internal/config/config.go` and `internal/config/config_test.go`: add mempool and backfill configuration knobs with safe defaults.
 - Modify `config.example.toml`: document mempool/backfill knobs.
+- Modify `cmd/metaso-p2p/main.go`: configure mempool polling, register `publishedcontent`, wire v2 listers, and run optional v2 backfill.
 - Modify `internal/aggregator/skillservice/db.go`, `list.go`, and tests: add provider-global-meta-id updated index and homepage read method.
 - Modify `internal/aggregator/bothomepage/types.go`, `query.go`, `build.go`, `api.go`, and tests: add v2 options, types, assembler, and section handling.
-- Modify `internal/api/router.go` and router tests if new aggregator wiring is needed by the existing router path.
+- Modify `internal/api/router.go` and router tests for endpoint/query handling only if needed; production aggregator registration currently lives in `cmd/metaso-p2p/main.go`, not the router.
 - Modify `docs/superpowers/specs/2026-06-09-bot-homepage-v2-design.md` only if implementation reveals a spec contradiction.
 
 ## Task 1: Extend UserInfo Persona Read Model
@@ -240,6 +241,7 @@ Then use `metabot-post-buzz` to post a development journal entry describing the 
 - Modify: `config.example.toml`
 - Modify: `internal/indexer/engine.go`
 - Modify: `internal/indexer/engine_test.go`
+- Modify: `cmd/metaso-p2p/main.go`
 
 - [ ] **Step 1: Write failing mempool routing tests**
 
@@ -262,8 +264,10 @@ func TestEnginePollsMempoolAndRoutesPins(t *testing.T) {
 			GlobalMetaId: "idq1", MetaId: "meta1", Address: "addr1", ContentBody: []byte(`{"content":"hello"}`),
 		}},
 	}
-	engine := NewEngine(reg, store)
-	engine.RegisterChain(chain, indexer)
+	engine := NewEngine(store, reg)
+	if err := engine.RegisterChain(chain, indexer, 0); err != nil {
+		t.Fatal(err)
+	}
 
 	engine.pollMempoolOnce()
 
@@ -285,8 +289,10 @@ func TestEngineMempoolPollDeduplicatesTransactionIDs(t *testing.T) {
 	}
 	chain := &mockChain{name: "mvc", mempoolTxs: []any{"tx1"}}
 	indexer := &mockIndexer{mempoolPins: []*aggregator.PinInscription{{Id: "tx1i0", Path: "/protocols/simplebuzz", Operation: "create", ChainName: "mvc"}}}
-	engine := NewEngine(reg, store)
-	engine.RegisterChain(chain, indexer)
+	engine := NewEngine(store, reg)
+	if err := engine.RegisterChain(chain, indexer, 0); err != nil {
+		t.Fatal(err)
+	}
 
 	engine.pollMempoolOnce()
 	engine.pollMempoolOnce()
@@ -307,32 +313,44 @@ Expected: fails because `pollMempoolOnce` and dedupe state do not exist.
 
 - [ ] **Step 3: Add config knobs**
 
-Add config fields with safe defaults:
+Add config fields to the existing `ZMQConfig`. Do not introduce a new `IndexerConfig`; current code has `BlockIndexConfig` and `ZMQConfig`, and `config.example.toml` already describes `[zmq]` as mempool monitoring.
 
 ```go
-type IndexerConfig struct {
-	// existing fields
-	MempoolEnabled      bool          `toml:"mempoolEnabled"`
-	MempoolPollInterval time.Duration `toml:"mempoolPollInterval"`
-	MempoolDedupeTTL    time.Duration `toml:"mempoolDedupeTTL"`
+type ZMQConfig struct {
+	Enabled               bool           `json:"enabled"`
+	MempoolPollingEnabled bool           `json:"mempoolPollingEnabled"`
+	MempoolPollInterval   time.Duration  `json:"mempoolPollInterval"`
+	MempoolDedupeTTL      time.Duration  `json:"mempoolDedupeTTL"`
+	BTC                   ChainZMQConfig `json:"btc"`
+	MVC                   ChainZMQConfig `json:"mvc"`
+	DOGE                  ChainZMQConfig `json:"doge"`
+	OPCAT                 ChainZMQConfig `json:"opcat"`
 }
 ```
 
 Defaults:
 
 ```go
-MempoolEnabled:      true,
-MempoolPollInterval: 10 * time.Second,
-MempoolDedupeTTL:    30 * time.Minute,
+MempoolPollingEnabled: true,
+MempoolPollInterval:   10 * time.Second,
+MempoolDedupeTTL:      30 * time.Minute,
 ```
 
-Update `config.example.toml` with:
+Update the existing `[zmq]` table in `config.example.toml`; do not create a second `[zmq]` table. Clarify that `[zmq].enabled` controls future ZMQ subscription behavior, while `mempoolPollingEnabled` controls the RPC polling loop implemented in this task.
 
 ```toml
-[indexer]
-mempoolEnabled = true
+[zmq]
+mempoolPollingEnabled = true
 mempoolPollInterval = "10s"
 mempoolDedupeTTL = "30m"
+```
+
+Add env loading:
+
+```go
+applyBoolEnv("METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED", &cfg.ZMQ.MempoolPollingEnabled)
+applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL", &cfg.ZMQ.MempoolPollInterval)
+applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL", &cfg.ZMQ.MempoolDedupeTTL)
 ```
 
 - [ ] **Step 4: Implement polling in `internal/indexer/engine.go`**
@@ -340,14 +358,44 @@ mempoolDedupeTTL = "30m"
 Add engine fields:
 
 ```go
-mempoolSeen map[string]time.Time
-mempoolMu   sync.Mutex
+mempoolPollingEnabled bool
+mempoolPollInterval   time.Duration
+mempoolDedupeTTL      time.Duration
+mempoolSeen           map[string]time.Time
+mempoolMu             sync.Mutex
 ```
 
 Initialize them in `NewEngine`:
 
 ```go
-mempoolSeen: make(map[string]time.Time),
+mempoolPollingEnabled: true,
+mempoolPollInterval:   10 * time.Second,
+mempoolDedupeTTL:      30 * time.Minute,
+mempoolSeen:           make(map[string]time.Time),
+```
+
+Add a configuration method because the current `NewEngine(store, registry)` signature does not accept config:
+
+```go
+func (e *Engine) ConfigureMempoolPolling(enabled bool, pollInterval, dedupeTTL time.Duration) {
+	e.mempoolPollingEnabled = enabled
+	if pollInterval > 0 {
+		e.mempoolPollInterval = pollInterval
+	}
+	if dedupeTTL > 0 {
+		e.mempoolDedupeTTL = dedupeTTL
+	}
+}
+```
+
+In `cmd/metaso-p2p/main.go`, call it immediately after `indexer.NewEngine(store, aggRegistry)`:
+
+```go
+idxEngine.ConfigureMempoolPolling(
+	cfg.ZMQ.MempoolPollingEnabled,
+	cfg.ZMQ.MempoolPollInterval,
+	cfg.ZMQ.MempoolDedupeTTL,
+)
 ```
 
 Add:
@@ -386,9 +434,9 @@ func (e *Engine) pollMempoolOnce() {
 }
 ```
 
-Add `filterSeenMempoolPins` keyed by `chainName + ":" + txID`, with pruning by TTL. In the first implementation, use a package constant `defaultMempoolDedupeTTL = 30 * time.Minute`; wire config into the engine only if the existing main wiring already passes config to the engine.
+Add `filterSeenMempoolPins` keyed by `chainName + ":" + txID`, with pruning by `e.mempoolDedupeTTL`.
 
-Update `zmqLoop` or the engine lifecycle loop so mempool polling runs periodically while the engine context is active.
+Update `zmqLoop` or the engine lifecycle loop so mempool polling runs periodically while the engine context is active. The loop should return immediately when `e.mempoolPollingEnabled` is false. It should use `e.mempoolPollInterval`, run one immediate `pollMempoolOnce()` on start, then tick until context cancellation.
 
 - [ ] **Step 5: Run focused tests**
 
@@ -402,7 +450,7 @@ Expected: PASS.
 
 ```bash
 git status --short
-git add internal/config/config.go internal/config/config_test.go config.example.toml internal/indexer/engine.go internal/indexer/engine_test.go
+git add internal/config/config.go internal/config/config_test.go config.example.toml internal/indexer/engine.go internal/indexer/engine_test.go cmd/metaso-p2p/main.go
 git commit -m "feat: route mempool pins through aggregators"
 ```
 
@@ -750,8 +798,9 @@ Add config:
 [botHomepageV2Backfill]
 enabled = false
 lookback = "1440h"
+timeout = "2m"
 pageSize = 100
-manapiBaseURL = "https://manapi.metaid.io"
+manapiBaseUrl = "https://manapi.metaid.io"
 ```
 
 Default `enabled=false` so normal test/server startup does not unexpectedly hit MANAPI.
@@ -1089,6 +1138,7 @@ Then use `metabot-post-buzz` to post a development journal entry describing v2 s
 **Files:**
 - Modify: `internal/api/router.go`
 - Modify: `internal/api/router_test.go`
+- Modify: `cmd/metaso-p2p/main.go`
 - Add: `docs/specs/2026-06-09-bot-homepage-v2-api.md`
 
 - [ ] **Step 1: Write failing full-router acceptance tests**
@@ -1139,21 +1189,57 @@ CGO_ENABLED=0 go test ./internal/api -run 'BotHomepageV2|DefaultStillV1' -count=
 
 Expected: fails because publishedcontent is not wired.
 
-- [ ] **Step 3: Register publishedcontent and listers**
+- [ ] **Step 3: Register publishedcontent, listers, and optional backfill**
 
-Register `publishedcontent.Aggregator` alongside existing aggregators. Wire:
+In `cmd/metaso-p2p/main.go`, import `internal/aggregator/publishedcontent`, register `publishedcontent.Aggregator` alongside existing aggregators, and wire it into `bothomepage`. This is the production registration point; do not assume `internal/api/router.go` owns aggregator construction.
 
 ```go
-botHomepageAgg.SetHomepageServiceLister(skillAgg)
-botHomepageAgg.SetPublishedContentLister(publishedAgg)
+var publishedAgg *publishedcontent.Aggregator
+publishedCandidate := &publishedcontent.Aggregator{}
+if err := aggRegistry.Register(publishedCandidate); err != nil {
+	log.Printf("WARNING: publishedcontent aggregator init failed: %v", err)
+} else {
+	publishedAgg = publishedCandidate
+}
 ```
 
 Keep existing:
 
 ```go
-botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userAgg))
-skillAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userAgg))
+botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userinfoAgg))
+skillserviceAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userinfoAgg))
 ```
+
+Then wire:
+
+```go
+botHomepageAgg.SetHomepageServiceLister(skillserviceAgg)
+if publishedAgg != nil {
+	botHomepageAgg.SetPublishedContentLister(publishedAgg)
+}
+```
+
+If Task 4 added `cfg.BotHomepageV2Backfill`, start the two-month backfill only when `cfg.BotHomepageV2Backfill.Enabled` is true. Default must remain false so normal startup and tests do not hit MANAPI.
+
+```go
+if cfg.BotHomepageV2Backfill.Enabled && publishedAgg != nil {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.BotHomepageV2Backfill.Timeout)
+		defer cancel()
+		err := publishedAgg.Backfill(ctx, publishedcontent.BackfillOptions{
+			Client:   publishedcontent.NewBackfillClient(cfg.BotHomepageV2Backfill.MANAPIBaseURL, http.DefaultClient),
+			Paths:    publishedcontent.DefaultBackfillPaths(),
+			Since:    time.Now().Add(-cfg.BotHomepageV2Backfill.Lookback),
+			PageSize: cfg.BotHomepageV2Backfill.PageSize,
+		})
+		if err != nil {
+			log.Printf("WARNING: bot homepage v2 backfill failed: %v", err)
+		}
+	}()
+}
+```
+
+If Task 4 chose different exact config or helper names, adapt this snippet to those exact names without changing the behavior.
 
 - [ ] **Step 4: Add API docs**
 
@@ -1178,7 +1264,7 @@ Expected: PASS.
 
 ```bash
 git status --short
-git add internal/api/router.go internal/api/router_test.go docs/specs
+git add internal/api/router.go internal/api/router_test.go cmd/metaso-p2p/main.go docs/specs
 git commit -m "feat: wire bot homepage v2 endpoint"
 ```
 
