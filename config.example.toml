@@ -241,6 +241,33 @@ maxPeers = 0
 maxSnapshotBytes = 0
 
 # ---------------------------------------------------------------------------
+# [botHomepageV2Backfill]  Optional Bot Homepage v2 MANAPI historical import
+# ---------------------------------------------------------------------------
+[botHomepageV2Backfill]
+# Disabled by default. When enabled by a later production wiring task, startup
+# can import recent simplebuzz, metaapp, and metabot-skill pins from MANAPI.
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_ENABLED
+enabled = false
+
+# How far back MANAPI backfill should read.
+# Format: Go duration string (e.g. "1440h" for 60 days).
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK
+lookback = "1440h"
+
+# Timeout for outbound MANAPI requests.
+# Format: Go duration string (e.g. "2m").
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_TIMEOUT
+timeout = "2m"
+
+# Number of pins requested per MANAPI page.
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_PAGE_SIZE
+pageSize = 100
+
+# MANAPI base URL used by the backfill client.
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_MANAPI_BASE_URL
+manapiBaseUrl = "https://manapi.metaid.io"
+
+# ---------------------------------------------------------------------------
 # [blockIndex]  Blockchain block scanning (indexer)
 #
 #   When [blockIndex].enabled is true the indexer engine starts and scans
