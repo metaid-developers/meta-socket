@@ -19,6 +19,8 @@ import (
 //   pin_to_source:<chainName>:<pinId>                         → sourceServicePinId (string)
 //   service_by_provider:<chainName>:<providerMetaId>:<sourceServicePinId>
 //                                                             → "" (index marker)
+//   service_by_provider_meta:<providerMetaId>:<invertedUpdatedAt>:<chainName>:<sourceServicePinId>
+//                                                             → "" (provider-scoped cross-chain fallback)
 //   service_by_provider_global:<providerGlobalMetaId>:<invertedUpdatedAt>:<chainName>:<sourceServicePinId>
 //                                                             → "" (index marker, descending by inverted ts)
 //   service_by_provider_global_chain:<providerGlobalMetaId>:<chainName>:<invertedUpdatedAt>:<sourceServicePinId>
@@ -30,6 +32,7 @@ const (
 	keyService                      = "service:"
 	keyPinToSource                  = "pin_to_source:"
 	keyServiceByProvider            = "service_by_provider:"
+	keyServiceByProviderMeta        = "service_by_provider_meta:"
 	keyServiceByProviderGlobal      = "service_by_provider_global:"
 	keyServiceByProviderGlobalChain = "service_by_provider_global_chain:"
 	keyServiceByUpdated             = "service_by_updated:"
@@ -58,6 +61,14 @@ func providerIndexPrefix(chainName, providerMetaId string) []byte {
 		return []byte(keyServiceByProvider)
 	}
 	return []byte(keyServiceByProvider + chainName + ":" + providerMetaId + ":")
+}
+
+func homepageProviderMetaIndexKey(providerMetaId string, updatedAt int64, chainName, sourcePinId string) []byte {
+	return []byte(keyServiceByProviderMeta + providerMetaId + ":" + invertedTimestampHex(updatedAt) + ":" + chainName + ":" + sourcePinId)
+}
+
+func homepageProviderMetaIndexPrefix(providerMetaId string) []byte {
+	return []byte(keyServiceByProviderMeta + providerMetaId + ":")
 }
 
 func providerGlobalIndexKey(providerGlobalMetaId string, updatedAt int64, chainName, sourcePinId string) []byte {
@@ -148,9 +159,11 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 		// keys — so we can safely tear down stale index entries even
 		// when the index was never written (e.g. previous record had an
 		// empty ProviderMetaId).
-		if previous.ProviderMetaId != "" && previous.ProviderMetaId != rec.ProviderMetaId {
+		if previous.ProviderMetaId != "" {
 			_ = a.store.Delete(NamespaceService,
 				providerIndexKey(previous.ChainName, previous.ProviderMetaId, previous.SourceServicePinId))
+			_ = a.store.Delete(NamespaceService,
+				homepageProviderMetaIndexKey(previous.ProviderMetaId, previous.UpdatedAt, previous.ChainName, previous.SourceServicePinId))
 		}
 		if previous.UpdatedAt > 0 && previous.UpdatedAt != rec.UpdatedAt {
 			_ = a.store.Delete(NamespaceService,
@@ -174,6 +187,10 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 	if rec.ProviderMetaId != "" {
 		if err := a.store.Set(NamespaceService,
 			providerIndexKey(rec.ChainName, rec.ProviderMetaId, rec.SourceServicePinId), []byte{}); err != nil {
+			return err
+		}
+		if err := a.store.Set(NamespaceService,
+			homepageProviderMetaIndexKey(rec.ProviderMetaId, rec.UpdatedAt, rec.ChainName, rec.SourceServicePinId), []byte{}); err != nil {
 			return err
 		}
 	}

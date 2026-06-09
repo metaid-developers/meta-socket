@@ -320,9 +320,9 @@ func (a *Aggregator) scanLateHomepageProviderAliasCandidates(p HomepageListParam
 			return parseProviderIndexKey(key, string(prefix), p.ChainName, providerMetaId)
 		}
 	} else {
-		prefix = providerIndexPrefix("", "")
+		prefix = homepageProviderMetaIndexPrefix(providerMetaId)
 		parse = func(key string) (homepageProviderCandidate, bool) {
-			return parseAnyProviderIndexKey(key, providerMetaId)
+			return parseHomepageProviderMetaIndexKey(key, string(prefix))
 		}
 	}
 
@@ -353,6 +353,9 @@ func matchesLateHomepageProviderAliasCandidate(rec *ServiceRecord, profile Profi
 		return false
 	}
 	if rec.SourceServicePinId != candidate.sourcePinId {
+		return false
+	}
+	if candidate.invertedUpdatedAt != "" && candidate.invertedUpdatedAt != invertedTimestampHex(rec.UpdatedAt) {
 		return false
 	}
 	if !strings.EqualFold(rec.ProviderMetaId, strings.TrimSpace(profile.MetaId)) {
@@ -556,6 +559,19 @@ func parseProviderIndexKey(key, prefix, chainName, providerMetaId string) (homep
 	return homepageProviderCandidate{
 		chainName:   chainName,
 		sourcePinId: rest,
+	}, true
+}
+
+func parseHomepageProviderMetaIndexKey(key, prefix string) (homepageProviderCandidate, bool) {
+	rest := strings.TrimPrefix(key, prefix)
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return homepageProviderCandidate{}, false
+	}
+	return homepageProviderCandidate{
+		invertedUpdatedAt: parts[0],
+		chainName:         parts[1],
+		sourcePinId:       parts[2],
 	}, true
 }
 

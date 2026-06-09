@@ -678,6 +678,76 @@ func TestListHomepageByProviderLateProfileCanonicalGlobalMetaId(t *testing.T) {
 	}
 }
 
+func TestHomepageProviderMetaIndexPrefixIsProviderScopedCrossChain(t *testing.T) {
+	prefix := string(homepageProviderMetaIndexPrefix("1GrqProvider"))
+	if prefix == string(providerIndexPrefix("", "")) {
+		t.Fatalf("cross-chain late alias fallback prefix must not scan the whole provider index: %q", prefix)
+	}
+	if !strings.HasPrefix(prefix, keyServiceByProviderMeta+"1GrqProvider:") {
+		t.Fatalf("cross-chain late alias fallback prefix is not provider scoped: %q", prefix)
+	}
+}
+
+func TestListHomepageByProviderLateProfileCrossChainDoesNotNeedLegacyProviderIndex(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny-late-meta-home:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "1GrqProvider", Timestamp: 1000,
+		ServiceName: "metabot-metaid-wiki-service", DisplayName: "MetaID Wiki",
+	})
+	if err := f.agg.store.Delete(NamespaceService,
+		providerIndexKey("mvc", "1GrqProvider", "sunny-late-meta-home:i0")); err != nil {
+		t.Fatalf("delete legacy provider index: %v", err)
+	}
+
+	profile := &ProfileSnapshot{
+		MetaId:        "1GrqProvider",
+		GlobalMetaId:  "idq14provider",
+		Address:       "1GrqProvider",
+		Name:          "AI_Sunny",
+		ChatPublicKey: "04sunny",
+	}
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId:     map[string]*ProfileSnapshot{"1GrqProvider": profile},
+		byGlobalMeta: map[string]*ProfileSnapshot{"idq14provider": profile},
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq14provider",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected late canonical homepage provider match from provider-meta index, got %d items: %+v", len(res.List), res.List)
+	}
+	if res.List[0].SourceServicePinId != "sunny-late-meta-home:i0" {
+		t.Fatalf("expected provider-meta indexed service, got %+v", res.List[0])
+	}
+}
+
+func TestMatchesLateHomepageProviderAliasCandidateRejectsStaleProviderMetaTimestamp(t *testing.T) {
+	rec := &ServiceRecord{
+		ChainName:            "mvc",
+		SourceServicePinId:   "sunny-stale-home:i0",
+		ProviderMetaId:       "1GrqProvider",
+		ProviderGlobalMetaId: "idq14provider",
+		UpdatedAt:            1000,
+	}
+	profile := ProfileSnapshot{MetaId: "1GrqProvider", GlobalMetaId: "idq14provider"}
+	p := HomepageListParams{ProviderGlobalMetaId: "idq14provider"}
+	candidate := homepageProviderCandidate{
+		invertedUpdatedAt: invertedTimestampHex(999),
+		chainName:         "mvc",
+		sourcePinId:       "sunny-stale-home:i0",
+	}
+	if matchesLateHomepageProviderAliasCandidate(rec, profile, p, candidate) {
+		t.Fatal("expected stale provider-meta fallback timestamp to be rejected")
+	}
+}
+
 func TestListHomepageByProviderSkipsInactiveBeforeHasMoreLimit(t *testing.T) {
 	f := newListFixture(t)
 	for i := 1; i <= 6; i++ {
