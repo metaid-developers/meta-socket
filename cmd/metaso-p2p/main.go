@@ -103,6 +103,7 @@ func main() {
 	var idxEngine *indexer.Engine
 	if store != nil && aggRegistry != nil && cfg.BlockIndex.Enabled {
 		idxEngine = indexer.NewEngine(store, aggRegistry)
+		idxEngine.ConfigureMempoolPolling(cfg.ZMQ.MempoolPollingEnabled, cfg.ZMQ.MempoolPollInterval, cfg.ZMQ.MempoolDedupeTTL)
 		log.Printf("block index enabled chains: %s", strings.Join(enabledBlockIndexChainNames(cfg.BlockIndex), ","))
 
 		// BTC chain + indexer

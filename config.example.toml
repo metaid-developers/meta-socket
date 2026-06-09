@@ -334,16 +334,29 @@ enabled = false
   #      METASO_P2P_BLOCK_INDEX_OPCAT_INITIAL_HEIGHT
 
 # ---------------------------------------------------------------------------
-# [zmq]  ZeroMQ mempool monitoring
+# [zmq]  Mempool monitoring
 #
-#   When [zmq].enabled is true the ZMQ event loop starts and subscribes to
-#   rawtx (or other) topics on every enabled chain. Each chain's [zmq.<chain>]
-#   section must also have enabled = true.
+#   [zmq].enabled controls future ZeroMQ subscription behavior for rawtx
+#   (or other) topics on every enabled chain. mempoolPollingEnabled controls
+#   the RPC polling loop that fetches mempool transactions and routes parsed
+#   mempool pins through aggregators.
 # ---------------------------------------------------------------------------
 [zmq]
-# Master toggle for ZMQ mempool monitoring.
+# Master toggle for future ZMQ subscription behavior.
 # Env: METASO_P2P_ZMQ_ENABLED
 enabled = false
+
+# Enable RPC mempool polling.
+# Env: METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED
+mempoolPollingEnabled = true
+
+# Interval for RPC mempool polling.
+# Env: METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL
+mempoolPollInterval = "10s"
+
+# TTL for suppressing duplicate mempool transaction IDs.
+# Env: METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL
+mempoolDedupeTTL = "30m"
 
   # --- Bitcoin (BTC) ZMQ ---
   [zmq.btc]

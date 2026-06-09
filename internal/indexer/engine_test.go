@@ -2,31 +2,44 @@ package indexer
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
+
+	"github.com/gin-gonic/gin"
 )
 
 // mockChain is a minimal chain.Chain for engine tests.
 type mockChain struct {
-	name       string
-	bestHeight int64
-	initErr    error
+	name           string
+	bestHeight     int64
+	initErr        error
+	mempoolTxList  []any
+	mempoolListErr error
 }
 
-func (m *mockChain) Name() string                              { return m.name }
-func (m *mockChain) Init() error                               { return m.initErr }
-func (m *mockChain) GetBlock(height int64) (any, error)        { return nil, nil }
-func (m *mockChain) GetBlockTime(height int64) (int64, error)  { return 0, nil }
-func (m *mockChain) GetTransaction(txID string) (any, error)   { return nil, nil }
-func (m *mockChain) GetBestHeight() int64                      { return m.bestHeight }
-func (m *mockChain) GetMempoolTransactionList() ([]any, error) { return nil, nil }
-func (m *mockChain) BroadcastTx(txRaw string) (string, error)  { return "", nil }
+func (m *mockChain) Name() string                             { return m.name }
+func (m *mockChain) Init() error                              { return m.initErr }
+func (m *mockChain) GetBlock(height int64) (any, error)       { return nil, nil }
+func (m *mockChain) GetBlockTime(height int64) (int64, error) { return 0, nil }
+func (m *mockChain) GetTransaction(txID string) (any, error)  { return nil, nil }
+func (m *mockChain) GetBestHeight() int64                     { return m.bestHeight }
+func (m *mockChain) GetMempoolTransactionList() ([]any, error) {
+	return m.mempoolTxList, m.mempoolListErr
+}
+func (m *mockChain) BroadcastTx(txRaw string) (string, error) { return "", nil }
 
 // mockIndexer is a minimal chain.Indexer for engine tests.
 type mockIndexer struct {
-	name string
+	name         string
+	mempoolPins  []*aggregator.PinInscription
+	mempoolTxIDs []string
+	mempoolErr   error
+	lastTxList   []any
+	mempoolCalls int
 }
 
 func (m *mockIndexer) Name() string { return m.name }
@@ -35,13 +48,128 @@ func (m *mockIndexer) CatchPins(height int64) ([]*aggregator.PinInscription, []s
 	return nil, nil, nil
 }
 func (m *mockIndexer) CatchMempoolPins(txList []any) ([]*aggregator.PinInscription, []string, error) {
-	return nil, nil, nil
+	m.lastTxList = txList
+	m.mempoolCalls++
+	return m.mempoolPins, m.mempoolTxIDs, m.mempoolErr
 }
 func (m *mockIndexer) CatchTransfer(idMap map[string]string) (map[string]any, error) {
 	return nil, nil
 }
 func (m *mockIndexer) GetAddress(pkScript []byte) string { return "" }
 func (m *mockIndexer) ZmqTopics() []string               { return nil }
+
+type recordingRegistryAggregator struct {
+	mu         sync.Mutex
+	mempoolPin []*aggregator.PinInscription
+}
+
+func (r *recordingRegistryAggregator) Name() string { return "recording" }
+func (r *recordingRegistryAggregator) Init(store *storage.PebbleStore, cacheProvider *cache.CacheProvider) error {
+	return nil
+}
+func (r *recordingRegistryAggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	return nil, nil
+}
+func (r *recordingRegistryAggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mempoolPin = append(r.mempoolPin, pin)
+	return nil, nil
+}
+func (r *recordingRegistryAggregator) RegisterRoutes(router *gin.RouterGroup) {}
+func (r *recordingRegistryAggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
+	return nil
+}
+func (r *recordingRegistryAggregator) MempoolPins() []*aggregator.PinInscription {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*aggregator.PinInscription, len(r.mempoolPin))
+	copy(out, r.mempoolPin)
+	return out
+}
+
+func TestEnginePollsMempoolAndRoutesPins(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	registry := aggregator.NewRegistry(store, nil)
+	recorder := &recordingRegistryAggregator{}
+	if err := registry.Register(recorder); err != nil {
+		t.Fatalf("Register recorder failed: %v", err)
+	}
+	engine := NewEngine(store, registry)
+
+	chain := &mockChain{name: "mvc", mempoolTxList: []any{"tx1"}}
+	pin := &aggregator.PinInscription{
+		Id:           "tx1i0",
+		Path:         "/protocols/simplebuzz",
+		Operation:    "create",
+		ChainName:    "mvc",
+		GlobalMetaId: "idq1",
+		MetaId:       "meta1",
+		Address:      "addr1",
+		ContentBody:  []byte(`{"content":"hello"}`),
+	}
+	idx := &mockIndexer{
+		name:        "mvc",
+		mempoolPins: []*aggregator.PinInscription{pin},
+		mempoolTxIDs: []string{
+			"tx1",
+		},
+	}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+
+	engine.pollMempoolOnce()
+
+	got := recorder.MempoolPins()
+	if len(got) != 1 {
+		t.Fatalf("expected one routed mempool pin, got %d", len(got))
+	}
+	if got[0] != pin {
+		t.Fatalf("expected routed pin pointer %p, got %p", pin, got[0])
+	}
+}
+
+func TestEngineMempoolPollDeduplicatesTransactionIDs(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	registry := aggregator.NewRegistry(store, nil)
+	recorder := &recordingRegistryAggregator{}
+	if err := registry.Register(recorder); err != nil {
+		t.Fatalf("Register recorder failed: %v", err)
+	}
+	engine := NewEngine(store, registry)
+
+	chain := &mockChain{name: "mvc", mempoolTxList: []any{"tx1"}}
+	idx := &mockIndexer{
+		name: "mvc",
+		mempoolPins: []*aggregator.PinInscription{{
+			Id:           "tx1i0",
+			Path:         "/protocols/simplebuzz",
+			Operation:    "create",
+			ChainName:    "mvc",
+			GlobalMetaId: "idq1",
+			MetaId:       "meta1",
+			Address:      "addr1",
+			ContentBody:  []byte(`{"content":"hello"}`),
+		}},
+		mempoolTxIDs: []string{"tx1"},
+	}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+
+	engine.pollMempoolOnce()
+	engine.pollMempoolOnce()
+
+	got := recorder.MempoolPins()
+	if len(got) != 1 {
+		t.Fatalf("expected duplicate txID to route once, got %d pins", len(got))
+	}
+}
 
 func TestPersistAndRestoreHeight(t *testing.T) {
 	// Use a real PebbleStore with a temporary directory.

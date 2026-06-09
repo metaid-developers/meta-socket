@@ -421,6 +421,41 @@ func TestLoadBlockIndexEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultZMQMempoolPollingConfig(t *testing.T) {
+	cfg := Default()
+
+	if !cfg.ZMQ.MempoolPollingEnabled {
+		t.Fatal("expected ZMQ mempool polling to be enabled by default")
+	}
+	if cfg.ZMQ.MempoolPollInterval != 10*time.Second {
+		t.Fatalf("expected default mempool poll interval 10s, got %s", cfg.ZMQ.MempoolPollInterval)
+	}
+	if cfg.ZMQ.MempoolDedupeTTL != 30*time.Minute {
+		t.Fatalf("expected default mempool dedupe TTL 30m, got %s", cfg.ZMQ.MempoolDedupeTTL)
+	}
+}
+
+func TestLoadZMQMempoolPollingEnv(t *testing.T) {
+	t.Setenv("METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED", "false")
+	t.Setenv("METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL", "15s")
+	t.Setenv("METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL", "45m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.ZMQ.MempoolPollingEnabled {
+		t.Fatal("expected ZMQ mempool polling enabled to load from env")
+	}
+	if cfg.ZMQ.MempoolPollInterval != 15*time.Second {
+		t.Fatalf("expected mempool poll interval env value, got %s", cfg.ZMQ.MempoolPollInterval)
+	}
+	if cfg.ZMQ.MempoolDedupeTTL != 45*time.Minute {
+		t.Fatalf("expected mempool dedupe TTL env value, got %s", cfg.ZMQ.MempoolDedupeTTL)
+	}
+}
+
 func TestLoadOPCATZMQEnv(t *testing.T) {
 	t.Setenv("METASO_P2P_ZMQ_ENABLED", "true")
 	t.Setenv("METASO_P2P_ZMQ_OPCAT_ENABLED", "true")
