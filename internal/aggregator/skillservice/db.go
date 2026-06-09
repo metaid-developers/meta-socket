@@ -53,6 +53,13 @@ func providerIndexKey(chainName, providerMetaId, sourcePinId string) []byte {
 	return []byte(keyServiceByProvider + chainName + ":" + providerMetaId + ":" + sourcePinId)
 }
 
+func providerIndexPrefix(chainName, providerMetaId string) []byte {
+	if chainName == "" {
+		return []byte(keyServiceByProvider)
+	}
+	return []byte(keyServiceByProvider + chainName + ":" + providerMetaId + ":")
+}
+
 func providerGlobalIndexKey(providerGlobalMetaId string, updatedAt int64, chainName, sourcePinId string) []byte {
 	return []byte(keyServiceByProviderGlobal + providerGlobalMetaId + ":" + invertedTimestampHex(updatedAt) + ":" + chainName + ":" + sourcePinId)
 }

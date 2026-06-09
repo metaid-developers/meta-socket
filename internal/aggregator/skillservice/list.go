@@ -224,42 +224,190 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 		return &HomepageListResult{List: []ServiceListItem{}}, nil
 	}
 
-	items := make([]ServiceListItem, 0, p.Size)
-	hasMore := false
+	records := make(map[string]expandedRecord)
 	err := a.scanHomepageProviderCandidates(p, func(candidate homepageProviderCandidate) (bool, error) {
-		rec, err := a.loadService(candidate.chainName, candidate.sourcePinId)
-		if err != nil {
-			log.Printf("[skillservice] homepage provider index %s/%s: %v; skipped",
-				candidate.chainName, candidate.sourcePinId, err)
-			return true, nil
-		}
-		if rec == nil {
-			return true, nil
-		}
-		profile := a.ResolveProvider(rec)
-		if !matchesHomepageProviderCandidate(rec, profile, p, candidate) {
-			return true, nil
-		}
-		if !p.IncludeInactive && !rec.IsVisibleDefault() {
-			return true, nil
-		}
-
-		rating, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
-		items = append(items, a.toListItem(expandedRecord{rec: rec, profile: profile, rating: rating}))
-		if len(items) > p.Size {
-			hasMore = true
-			return false, nil
-		}
+		a.addHomepageProviderGlobalCandidate(records, p, candidate)
 		return true, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if len(items) > p.Size {
-		items = items[:p.Size]
+
+	if profile, ok := a.lookupHomepageProviderGlobalProfile(p.ProviderGlobalMetaId); ok {
+		if err := a.scanLateHomepageProviderAliasCandidates(p, profile, func(candidate homepageProviderCandidate) (bool, error) {
+			a.addLateHomepageProviderAliasCandidate(records, p, profile, candidate)
+			return true, nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	page, hasMore := a.pageHomepageProviderRecords(records, p.Size)
+	items := make([]ServiceListItem, 0, len(page))
+	for _, exp := range page {
+		items = append(items, a.toListItem(exp))
 	}
 
 	return &HomepageListResult{List: items, HasMore: hasMore}, nil
+}
+
+func (a *Aggregator) addHomepageProviderGlobalCandidate(records map[string]expandedRecord, p HomepageListParams, candidate homepageProviderCandidate) {
+	rec, err := a.loadService(candidate.chainName, candidate.sourcePinId)
+	if err != nil {
+		log.Printf("[skillservice] homepage provider index %s/%s: %v; skipped",
+			candidate.chainName, candidate.sourcePinId, err)
+		return
+	}
+	if rec == nil {
+		return
+	}
+	profile := a.ResolveProvider(rec)
+	if !matchesHomepageProviderCandidate(rec, profile, p, candidate) {
+		return
+	}
+	if !p.IncludeInactive && !rec.IsVisibleDefault() {
+		return
+	}
+
+	rating, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
+	records[homepageProviderRecordKey(rec)] = expandedRecord{rec: rec, profile: profile, rating: rating}
+}
+
+func (a *Aggregator) addLateHomepageProviderAliasCandidate(records map[string]expandedRecord, p HomepageListParams, profile ProfileSnapshot, candidate homepageProviderCandidate) {
+	rec, err := a.loadService(candidate.chainName, candidate.sourcePinId)
+	if err != nil {
+		log.Printf("[skillservice] provider-meta homepage fallback index %s/%s: %v; skipped",
+			candidate.chainName, candidate.sourcePinId, err)
+		return
+	}
+	if rec == nil {
+		return
+	}
+	if !matchesLateHomepageProviderAliasCandidate(rec, profile, p, candidate) {
+		return
+	}
+	if !p.IncludeInactive && !rec.IsVisibleDefault() {
+		return
+	}
+
+	rating, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
+	records[homepageProviderRecordKey(rec)] = expandedRecord{rec: rec, profile: profile, rating: rating}
+	a.backfillHomepageProviderGlobalIndex(p.ProviderGlobalMetaId, rec)
+}
+
+func (a *Aggregator) lookupHomepageProviderGlobalProfile(providerGlobalMetaId string) (ProfileSnapshot, bool) {
+	if a.profileLookup == nil || providerGlobalMetaId == "" {
+		return ProfileSnapshot{}, false
+	}
+	profile, err := a.profileLookup.LookupByGlobalMetaId(providerGlobalMetaId)
+	if err != nil || profile == nil || strings.TrimSpace(profile.MetaId) == "" {
+		return ProfileSnapshot{}, false
+	}
+	return *profile, true
+}
+
+func (a *Aggregator) scanLateHomepageProviderAliasCandidates(p HomepageListParams, profile ProfileSnapshot, visit func(homepageProviderCandidate) (bool, error)) error {
+	providerMetaId := strings.TrimSpace(profile.MetaId)
+	if providerMetaId == "" {
+		return nil
+	}
+
+	var prefix []byte
+	var parse func(string) (homepageProviderCandidate, bool)
+	if p.ChainName != "" {
+		prefix = providerIndexPrefix(p.ChainName, providerMetaId)
+		parse = func(key string) (homepageProviderCandidate, bool) {
+			return parseProviderIndexKey(key, string(prefix), p.ChainName, providerMetaId)
+		}
+	} else {
+		prefix = providerIndexPrefix("", "")
+		parse = func(key string) (homepageProviderCandidate, bool) {
+			return parseAnyProviderIndexKey(key, providerMetaId)
+		}
+	}
+
+	err := a.store.ScanPrefix(NamespaceService, prefix, func(key, _ []byte) error {
+		candidate, ok := parse(string(key))
+		if ok {
+			keepGoing, err := visit(candidate)
+			if err != nil {
+				return err
+			}
+			if !keepGoing {
+				return errStopHomepageScan
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errStopHomepageScan) {
+		err = nil
+	}
+	return err
+}
+
+func matchesLateHomepageProviderAliasCandidate(rec *ServiceRecord, profile ProfileSnapshot, p HomepageListParams, candidate homepageProviderCandidate) bool {
+	if rec == nil {
+		return false
+	}
+	if !strings.EqualFold(rec.ChainName, candidate.chainName) {
+		return false
+	}
+	if rec.SourceServicePinId != candidate.sourcePinId {
+		return false
+	}
+	if !strings.EqualFold(rec.ProviderMetaId, strings.TrimSpace(profile.MetaId)) {
+		return false
+	}
+	if !matchesHomepageProviderGlobalMetaId(rec, profile, p.ProviderGlobalMetaId) {
+		return false
+	}
+	if p.ChainName != "" && !strings.EqualFold(rec.ChainName, p.ChainName) {
+		return false
+	}
+	return true
+}
+
+func (a *Aggregator) backfillHomepageProviderGlobalIndex(providerGlobalMetaId string, rec *ServiceRecord) {
+	if rec == nil || providerGlobalMetaId == "" || rec.UpdatedAt <= 0 {
+		return
+	}
+	if err := a.store.Set(NamespaceService,
+		providerGlobalIndexKey(providerGlobalMetaId, rec.UpdatedAt, rec.ChainName, rec.SourceServicePinId), []byte{}); err != nil {
+		log.Printf("[skillservice] backfill homepage provider-global index %s/%s: %v",
+			rec.ChainName, rec.SourceServicePinId, err)
+	}
+	if err := a.store.Set(NamespaceService,
+		providerGlobalChainIndexKey(providerGlobalMetaId, rec.ChainName, rec.UpdatedAt, rec.SourceServicePinId), []byte{}); err != nil {
+		log.Printf("[skillservice] backfill homepage provider-global-chain index %s/%s: %v",
+			rec.ChainName, rec.SourceServicePinId, err)
+	}
+}
+
+func (a *Aggregator) pageHomepageProviderRecords(records map[string]expandedRecord, size int) ([]expandedRecord, bool) {
+	items := make([]expandedRecord, 0, len(records))
+	for _, exp := range records {
+		items = append(items, exp)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].rec.UpdatedAt != items[j].rec.UpdatedAt {
+			return items[i].rec.UpdatedAt > items[j].rec.UpdatedAt
+		}
+		if items[i].rec.ChainName != items[j].rec.ChainName {
+			return items[i].rec.ChainName < items[j].rec.ChainName
+		}
+		return items[i].rec.SourceServicePinId < items[j].rec.SourceServicePinId
+	})
+	if len(items) <= size {
+		return items, false
+	}
+	return items[:size], true
+}
+
+func homepageProviderRecordKey(rec *ServiceRecord) string {
+	if rec == nil {
+		return ""
+	}
+	return strings.ToLower(rec.ChainName) + "\x00" + rec.SourceServicePinId
 }
 
 func matchesHomepageProviderCandidate(rec *ServiceRecord, profile ProfileSnapshot, p HomepageListParams, candidate homepageProviderCandidate) bool {
@@ -397,6 +545,35 @@ func parseProviderGlobalChainIndexKey(key, prefix, chainName string) (homepagePr
 		invertedUpdatedAt: parts[0],
 		chainName:         chainName,
 		sourcePinId:       parts[1],
+	}, true
+}
+
+func parseProviderIndexKey(key, prefix, chainName, providerMetaId string) (homepageProviderCandidate, bool) {
+	rest := strings.TrimPrefix(key, prefix)
+	if rest == "" {
+		return homepageProviderCandidate{}, false
+	}
+	return homepageProviderCandidate{
+		chainName:   chainName,
+		sourcePinId: rest,
+	}, true
+}
+
+func parseAnyProviderIndexKey(key, providerMetaId string) (homepageProviderCandidate, bool) {
+	if !strings.HasPrefix(key, keyServiceByProvider) {
+		return homepageProviderCandidate{}, false
+	}
+	rest := strings.TrimPrefix(key, keyServiceByProvider)
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return homepageProviderCandidate{}, false
+	}
+	if !strings.EqualFold(parts[1], providerMetaId) {
+		return homepageProviderCandidate{}, false
+	}
+	return homepageProviderCandidate{
+		chainName:   parts[0],
+		sourcePinId: parts[2],
 	}, true
 }
 

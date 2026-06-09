@@ -642,6 +642,42 @@ func TestListHomepageByProviderCanonicalGlobalMetaIdFromProfile(t *testing.T) {
 	}
 }
 
+func TestListHomepageByProviderLateProfileCanonicalGlobalMetaId(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny-late-home:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "1GrqProvider", Timestamp: 1000,
+		ServiceName: "metabot-metaid-wiki-service", DisplayName: "MetaID Wiki",
+	})
+
+	profile := &ProfileSnapshot{
+		MetaId:        "1GrqProvider",
+		GlobalMetaId:  "idq14provider",
+		Address:       "1GrqProvider",
+		Name:          "AI_Sunny",
+		ChatPublicKey: "04sunny",
+	}
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId:     map[string]*ProfileSnapshot{"1GrqProvider": profile},
+		byGlobalMeta: map[string]*ProfileSnapshot{"idq14provider": profile},
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq14provider",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected late canonical homepage provider match, got %d items: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ProviderGlobalMetaId != "idq14provider" {
+		t.Fatalf("providerGlobalMetaId: got %q want canonical idq14provider", res.List[0].ProviderGlobalMetaId)
+	}
+}
+
 func TestListHomepageByProviderSkipsInactiveBeforeHasMoreLimit(t *testing.T) {
 	f := newListFixture(t)
 	for i := 1; i <= 6; i++ {
