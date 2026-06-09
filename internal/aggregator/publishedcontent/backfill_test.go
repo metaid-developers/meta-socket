@@ -1,9 +1,12 @@
 package publishedcontent
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,6 +78,82 @@ func TestBackfillUsesContentSummaryFallback(t *testing.T) {
 	}
 	if got := result.Items[0].PayloadJSON["name"]; got != "writer" {
 		t.Fatalf("payload name: got %#v want writer", got)
+	}
+}
+
+func TestBackfillRejectsRepeatedCursor(t *testing.T) {
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	first := manapiPinForTest("first-buzz:i0", PathSimpleBuzz, now.Add(-time.Hour))
+	second := manapiPinForTest("second-buzz:i0", PathSimpleBuzz, now.Add(-30*time.Minute))
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pin/path/list" {
+			t.Fatalf("request path: got %q want /pin/path/list", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("path"); got != PathSimpleBuzz {
+			t.Fatalf("path query: got %q want %q", got, PathSimpleBuzz)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		requests++
+		response := map[string]any{
+			"code": 1,
+			"data": map[string]any{
+				"list":       []map[string]any{first},
+				"nextCursor": "same",
+			},
+		}
+		switch {
+		case requests == 2:
+			response["data"].(map[string]any)["list"] = []map[string]any{second}
+		case requests > 2:
+			response["data"].(map[string]any)["list"] = []map[string]any{}
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	err := agg.Backfill(BackfillOptions{
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Paths:    []string{PathSimpleBuzz},
+		Since:    now.AddDate(0, -2, 0),
+		PageSize: 1,
+	})
+	if err == nil {
+		t.Fatal("Backfill returned nil error, want repeated cursor error")
+	}
+	if !strings.Contains(err.Error(), `repeated MANAPI cursor "same"`) {
+		t.Fatalf("Backfill error: got %v want repeated MANAPI cursor %q", err, "same")
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d want 2", requests)
+	}
+}
+
+func TestBackfillUsesCallerContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not receive request after caller context is canceled")
+	}))
+	defer server.Close()
+
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	err := agg.Backfill(BackfillOptions{
+		Context:  ctx,
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Paths:    []string{PathSimpleBuzz},
+		Since:    time.Now().AddDate(0, -2, 0),
+		PageSize: 1,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Backfill error: got %v want context.Canceled", err)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 )
 
 type BackfillOptions struct {
+	Context  context.Context
 	Client   *BackfillClient
 	Paths    []string
 	Since    time.Time
@@ -51,11 +52,17 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	if pageSize <= 0 {
 		pageSize = defaultBackfillPageSize
 	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	for _, path := range paths {
 		cursor := ""
+		seenCursors := make(map[string]struct{})
 		for {
-			page, err := client.ListPath(context.Background(), path, cursor, pageSize)
+			seenCursors[cursor] = struct{}{}
+			page, err := client.ListPath(ctx, path, cursor, pageSize)
 			if err != nil {
 				return err
 			}
@@ -79,6 +86,9 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 			}
 			if page.NextCursor == "" || len(page.Pins) < pageSize {
 				break
+			}
+			if _, seen := seenCursors[page.NextCursor]; seen {
+				return fmt.Errorf("repeated MANAPI cursor %q for path %s", page.NextCursor, path)
 			}
 			cursor = page.NextCursor
 		}
