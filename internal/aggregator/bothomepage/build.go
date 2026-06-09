@@ -108,7 +108,7 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 	if opts.Version == "v2" && opts.IncludeSections {
 		out.Sections, out.Warnings = a.loadSections(canonical.GlobalMetaId, opts, out.Warnings)
 	}
-	out.Actions = buildActions(out.Profile.ChatPubkey, len(out.Services), canonical.GlobalMetaId)
+	out.Actions = buildActions(out.Profile.ChatPubkey, serviceActionCount(out), canonical.GlobalMetaId)
 
 	return out, nil
 }
@@ -307,38 +307,38 @@ func profileBioForVersion(p *ProfileSnapshot, bio, version string) string {
 	return bio
 }
 
-type legacyPersonaBio struct {
-	Role            string   `json:"role"`
-	Soul            string   `json:"soul"`
-	Goal            string   `json:"goal"`
-	LLM             string   `json:"llm"`
-	AllowChatSkills []string `json:"allowChatSkills"`
-}
-
 func personaFromLegacyBio(raw string) (Persona, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || !strings.HasPrefix(raw, "{") {
 		return Persona{}, false
 	}
-	var legacy legacyPersonaBio
+	var legacy map[string]any
 	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
 		return Persona{}, false
 	}
-	if strings.TrimSpace(legacy.Role) == "" &&
-		strings.TrimSpace(legacy.Soul) == "" &&
-		strings.TrimSpace(legacy.Goal) == "" &&
-		strings.TrimSpace(legacy.LLM) == "" &&
-		len(legacy.AllowChatSkills) == 0 {
+	if !hasLegacyPersonaKey(legacy) {
 		return Persona{}, false
 	}
+
+	role := stringValue(legacy["role"])
+	soul := stringValue(legacy["soul"])
+	goal := stringValue(legacy["goal"])
+	allow := firstNonEmptyStringSlice(
+		stringSliceValue(legacy["allowChatSkills"]),
+		stringSliceValue(legacy["chatSkills"]),
+		stringSliceValue(legacy["skills"]),
+		stringSliceValue(legacy["tools"]),
+	)
+	llm := llmValue(firstNonNil(legacy["llm"], legacy["LLM"]))
+
 	return Persona{
-		Role: strings.TrimSpace(legacy.Role),
-		Soul: strings.TrimSpace(legacy.Soul),
-		Goal: strings.TrimSpace(legacy.Goal),
+		Role: role,
+		Soul: soul,
+		Goal: goal,
 		ChatSkills: ChatSkills{
-			Allow: trimStringSlice(legacy.AllowChatSkills),
+			Allow: allow,
 		},
-		LLM: LLM{Provider: strings.TrimSpace(legacy.LLM)},
+		LLM: llm,
 	}, true
 }
 
@@ -347,11 +347,12 @@ func parseChatSkills(raw string) (ChatSkills, bool) {
 	if raw == "" {
 		return ChatSkills{}, false
 	}
-	var decoded struct {
-		Allow []string `json:"allowChatSkills"`
-	}
-	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
-		return ChatSkills{Allow: trimStringSlice(decoded.Allow)}, true
+	if startsJSONContainer(raw) {
+		var decoded any
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			return ChatSkills{}, false
+		}
+		return ChatSkills{Allow: stringSliceValue(decoded)}, true
 	}
 	return ChatSkills{Allow: []string{raw}}, true
 }
@@ -361,21 +362,96 @@ func parseLLM(raw string) (LLM, bool) {
 	if raw == "" {
 		return LLM{}, false
 	}
-	var decoded struct {
-		Provider        string `json:"provider"`
-		PrimaryProvider string `json:"primaryProvider"`
-		Model           string `json:"model"`
-		Name            string `json:"name"`
-		DisplayName     string `json:"displayName"`
-	}
-	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
-		return LLM{
-			Provider: firstNonEmpty(decoded.Provider, decoded.PrimaryProvider),
-			Model:    strings.TrimSpace(decoded.Model),
-			Name:     firstNonEmpty(decoded.Name, decoded.DisplayName),
-		}, true
+	if startsJSONContainer(raw) {
+		var decoded any
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			return LLM{}, false
+		}
+		return llmValue(decoded), true
 	}
 	return LLM{Provider: raw}, true
+}
+
+func startsJSONContainer(raw string) bool {
+	return strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[")
+}
+
+func hasLegacyPersonaKey(values map[string]any) bool {
+	for _, key := range []string{"role", "soul", "goal", "llm", "LLM", "allowChatSkills", "chatSkills", "skills", "tools"} {
+		if _, ok := values[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func stringValue(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
+}
+
+func stringSliceValue(value any) []string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case string:
+		return trimStringSlice([]string{typed})
+	case []string:
+		return trimStringSlice(typed)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := stringValue(item); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case map[string]any:
+		return firstNonEmptyStringSlice(
+			stringSliceValue(typed["allowChatSkills"]),
+			stringSliceValue(typed["allow"]),
+			stringSliceValue(typed["chatSkills"]),
+			stringSliceValue(typed["skills"]),
+			stringSliceValue(typed["tools"]),
+		)
+	default:
+		return nil
+	}
+}
+
+func firstNonEmptyStringSlice(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func llmValue(value any) LLM {
+	switch typed := value.(type) {
+	case string:
+		return LLM{Provider: strings.TrimSpace(typed)}
+	case map[string]any:
+		return LLM{
+			Provider: firstNonEmpty(stringValue(typed["provider"]), stringValue(typed["primaryProvider"])),
+			Model:    stringValue(typed["model"]),
+			Name:     firstNonEmpty(stringValue(typed["name"]), stringValue(typed["displayName"])),
+		}
+	default:
+		return LLM{}
+	}
 }
 
 func trimStringSlice(values []string) []string {
@@ -386,6 +462,25 @@ func trimStringSlice(values []string) []string {
 		}
 	}
 	return out
+}
+
+func serviceActionCount(out *Data) int {
+	if out == nil {
+		return 0
+	}
+	if len(out.Services) > 0 {
+		return len(out.Services)
+	}
+	for _, section := range out.Sections {
+		if section.Id != "services" {
+			continue
+		}
+		if section.Returned > 0 {
+			return section.Returned
+		}
+		return len(section.Items)
+	}
+	return 0
 }
 
 func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, warnings []string) ([]Section, []string) {

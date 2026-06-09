@@ -295,6 +295,73 @@ func TestBuildV2ParsesLegacyBioIntoPersona(t *testing.T) {
 	}
 }
 
+func TestBuildV2ParsesMixedShapeLegacyBioIntoPersona(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Persona Bot",
+		Bio:          `{"role":"Agent role","tools":["metabot-post-buzz"],"llm":{"primaryProvider":"deepseek","displayName":"DeepSeek"}}`,
+	}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Profile.Bio != "" {
+		t.Fatalf("Profile.Bio = %q, want empty for mixed-shape legacy persona JSON", got.Profile.Bio)
+	}
+	if got.Persona == nil {
+		t.Fatal("Persona = nil, want parsed persona")
+	}
+	if got.Persona.Role != "Agent role" {
+		t.Fatalf("Persona.Role = %q, want Agent role", got.Persona.Role)
+	}
+	if len(got.Persona.ChatSkills.Allow) != 1 || got.Persona.ChatSkills.Allow[0] != "metabot-post-buzz" {
+		t.Fatalf("Persona.ChatSkills.Allow = %#v, want metabot-post-buzz", got.Persona.ChatSkills.Allow)
+	}
+	if got.Persona.LLM.Provider != "deepseek" {
+		t.Fatalf("Persona.LLM.Provider = %q, want deepseek", got.Persona.LLM.Provider)
+	}
+}
+
+func TestBuildV2IgnoresMalformedPreferredPersonaJSON(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Persona Bot",
+		ChatSkills:   "{bad",
+		LLM:          "{bad",
+	}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Persona == nil {
+		t.Fatal("Persona = nil, want empty persona")
+	}
+	if len(got.Persona.ChatSkills.Allow) != 0 {
+		t.Fatalf("Persona.ChatSkills.Allow = %#v, want empty for malformed preferred JSON", got.Persona.ChatSkills.Allow)
+	}
+	if got.Persona.LLM.Provider != "" {
+		t.Fatalf("Persona.LLM.Provider = %q, want empty for malformed preferred JSON", got.Persona.LLM.Provider)
+	}
+}
+
 func TestBuildV2SectionsAreOptional(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -333,6 +400,41 @@ func TestBuildV2SectionsAreOptional(t *testing.T) {
 	}
 	if !containsExactWarning(got.Warnings, "metaapps section unavailable") {
 		t.Fatalf("Warnings = %#v, want exact metaapps section unavailable", got.Warnings)
+	}
+}
+
+func TestBuildV2SectionsServicesActionEnabledWhenServicesOnlyInSection(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Section Bot",
+	}})
+	agg.SetHomepageServiceLister(&recordingHomepageServiceLister{result: &skillservice.HomepageListResult{List: []skillservice.ServiceListItem{{
+		Id:          "svc-1",
+		DisplayName: "Question Answering",
+	}}}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+	opts.IncludeServices = false
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if len(got.Services) != 0 {
+		t.Fatalf("Services length = %d, want 0 when includeServices=false", len(got.Services))
+	}
+	if len(got.Sections) == 0 || got.Sections[0].Id != "services" || got.Sections[0].Returned != 1 {
+		t.Fatalf("services section = %+v, want one returned service", got.Sections)
+	}
+	if !got.Actions[1].Enabled {
+		t.Fatalf("services action = %+v, want enabled from services section count", got.Actions[1])
 	}
 }
 
