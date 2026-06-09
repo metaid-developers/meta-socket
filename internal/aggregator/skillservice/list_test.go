@@ -689,3 +689,60 @@ func TestListHomepageByProviderCrossChain(t *testing.T) {
 		t.Fatal("expected HasMore=false for exactly two visible services")
 	}
 }
+
+func TestListHomepageByProviderSkipsStaleProviderGlobalIndex(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "provider-b-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provB", Timestamp: 100,
+		ServiceName: "provider-b-home", DisplayName: "Provider B Home",
+	})
+	if err := f.agg.store.Set(NamespaceService,
+		providerGlobalIndexKey("idq1-provA", 200, "mvc", "provider-b-home:i0"), []byte{}); err != nil {
+		t.Fatalf("seed stale provider-global index: %v", err)
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 0 {
+		t.Fatalf("expected stale provider-global index to be skipped, got %+v", res.List)
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false when only stale indexed services exist")
+	}
+}
+
+func TestListHomepageByProviderSkipsCorruptIndexedService(t *testing.T) {
+	f := newListFixture(t)
+	if err := f.agg.store.Set(NamespaceService, serviceKey("mvc", "corrupt-home:i0"), []byte("{")); err != nil {
+		t.Fatalf("seed corrupt service record: %v", err)
+	}
+	if err := f.agg.store.Set(NamespaceService,
+		providerGlobalIndexKey("idq1-provA", 200, "mvc", "corrupt-home:i0"), []byte{}); err != nil {
+		t.Fatalf("seed corrupt provider-global index: %v", err)
+	}
+	f.seed(t, servicePinOpts{
+		PinId: "valid-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		ServiceName: "valid-home", DisplayName: "Valid Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatalf("expected corrupt indexed service to be skipped, got err=%v", err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected one valid homepage item after corrupt record, got %d: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ServiceName != "valid-home" {
+		t.Fatalf("expected valid service after corrupt record, got %+v", res.List[0])
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -228,9 +229,14 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 	err := a.scanHomepageProviderCandidates(p, func(candidate homepageProviderCandidate) (bool, error) {
 		rec, err := a.loadService(candidate.chainName, candidate.sourcePinId)
 		if err != nil {
-			return false, err
+			log.Printf("[skillservice] homepage provider index %s/%s: %v; skipped",
+				candidate.chainName, candidate.sourcePinId, err)
+			return true, nil
 		}
 		if rec == nil {
+			return true, nil
+		}
+		if !matchesHomepageProviderCandidate(rec, p, candidate) {
 			return true, nil
 		}
 		if !p.IncludeInactive && !rec.IsVisibleDefault() {
@@ -254,6 +260,25 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 	}
 
 	return &HomepageListResult{List: items, HasMore: hasMore}, nil
+}
+
+func matchesHomepageProviderCandidate(rec *ServiceRecord, p HomepageListParams, candidate homepageProviderCandidate) bool {
+	if rec == nil {
+		return false
+	}
+	if !strings.EqualFold(rec.ChainName, candidate.chainName) {
+		return false
+	}
+	if rec.SourceServicePinId != candidate.sourcePinId {
+		return false
+	}
+	if !strings.EqualFold(rec.ProviderGlobalMetaId, p.ProviderGlobalMetaId) {
+		return false
+	}
+	if p.ChainName != "" && !strings.EqualFold(rec.ChainName, p.ChainName) {
+		return false
+	}
+	return true
 }
 
 // expandedRecord pairs a raw ServiceRecord with the in-process resolved
