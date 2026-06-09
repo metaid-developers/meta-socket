@@ -8,7 +8,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
-func (a *Aggregator) processPin(pin *aggregator.PinInscription, _ bool) error {
+func (a *Aggregator) processPin(pin *aggregator.PinInscription, isMempool bool) error {
 	if pin == nil || pin.Id == "" || pin.ChainName == "" {
 		return nil
 	}
@@ -19,26 +19,32 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription, _ bool) error {
 
 	switch normaliseOperation(pin.Operation) {
 	case OperationCreate:
-		return a.processCreate(pin, protocolPath)
+		return a.processCreate(pin, protocolPath, isMempool)
 	case OperationModify:
-		return a.processModify(pin, protocolPath)
+		return a.processModify(pin, protocolPath, isMempool)
 	case OperationRevoke:
-		return a.processRevoke(pin, protocolPath)
+		return a.processRevoke(pin, protocolPath, isMempool)
 	default:
 		return nil
 	}
 }
 
-func (a *Aggregator) processCreate(pin *aggregator.PinInscription, protocolPath string) error {
+func (a *Aggregator) processCreate(pin *aggregator.PinInscription, protocolPath string, isMempool bool) error {
 	existing, err := a.loadRecord(pin.ChainName, protocolPath, pin.Id)
-	if err != nil || existing != nil {
+	if err != nil {
 		return err
 	}
-	rec := newRecordFromPin(pin, protocolPath, pin.Id)
+	rec := newRecordFromPin(pin, protocolPath, pin.Id, isMempool)
+	if existing != nil {
+		if !isMempool && existing.IsMempool {
+			return a.saveRecord(rec, existing)
+		}
+		return nil
+	}
 	return a.saveRecord(rec, nil)
 }
 
-func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath string) error {
+func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath string, isMempool bool) error {
 	targetPinId := targetPinID(pin)
 	if targetPinId == "" {
 		return nil
@@ -48,7 +54,7 @@ func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath 
 		return err
 	}
 
-	updated := newRecordFromPin(pin, protocolPath, previous.SourcePinId)
+	updated := newRecordFromPin(pin, protocolPath, previous.SourcePinId, isMempool)
 	updated.CreatedAt = previous.CreatedAt
 	updated.SourceNumber = previous.SourceNumber
 	updated.SourcePath = previous.SourcePath
@@ -78,7 +84,7 @@ func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath 
 	return a.mapPinToSource(pin.ChainName, pin.Id, previous.SourcePinId)
 }
 
-func (a *Aggregator) processRevoke(pin *aggregator.PinInscription, protocolPath string) error {
+func (a *Aggregator) processRevoke(pin *aggregator.PinInscription, protocolPath string, isMempool bool) error {
 	targetPinId := targetPinID(pin)
 	if targetPinId == "" {
 		return nil
@@ -91,6 +97,7 @@ func (a *Aggregator) processRevoke(pin *aggregator.PinInscription, protocolPath 
 	updated := *previous
 	updated.Operation = OperationRevoke
 	updated.Hidden = true
+	updated.IsMempool = isMempool
 	updated.CurrentPinId = pin.Id
 	updated.CurrentNumber = pin.Number
 	updated.CurrentPath = pin.Path
@@ -107,7 +114,7 @@ func (a *Aggregator) processRevoke(pin *aggregator.PinInscription, protocolPath 
 	return a.mapPinToSource(pin.ChainName, pin.Id, previous.SourcePinId)
 }
 
-func newRecordFromPin(pin *aggregator.PinInscription, protocolPath, sourcePinId string) *Record {
+func newRecordFromPin(pin *aggregator.PinInscription, protocolPath, sourcePinId string, isMempool bool) *Record {
 	payload := extractPayload(pin)
 	ts := pin.Timestamp
 	rec := &Record{
@@ -122,6 +129,7 @@ func newRecordFromPin(pin *aggregator.PinInscription, protocolPath, sourcePinId 
 
 		Operation: normaliseOperation(pin.Operation),
 		Hidden:    false,
+		IsMempool: isMempool,
 
 		ContentType:    pin.ContentType,
 		PayloadText:    payload.text,

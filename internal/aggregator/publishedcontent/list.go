@@ -167,6 +167,7 @@ func toSectionItem(rec *Record) SectionItem {
 
 		Operation: rec.Operation,
 		Hidden:    rec.Hidden,
+		IsMempool: rec.IsMempool,
 
 		ContentType:    rec.ContentType,
 		PayloadText:    rec.PayloadText,

@@ -28,12 +28,14 @@ type contentPinOpts struct {
 	ChainName      string
 	OriginalId     string
 	Timestamp      int64
+	Number         int64
 	ContentBody    []byte
 	ContentSummary string
 	ContentType    string
 	GlobalMetaId   string
 	MetaId         string
 	Address        string
+	Host           string
 }
 
 func makeContentPin(opts contentPinOpts) *aggregator.PinInscription {
@@ -72,7 +74,9 @@ func makeContentPin(opts contentPinOpts) *aggregator.PinInscription {
 		Address:        opts.Address,
 		CreateAddress:  opts.Address,
 		Timestamp:      opts.Timestamp,
+		Number:         opts.Number,
 		OriginalId:     opts.OriginalId,
+		Host:           opts.Host,
 	}
 }
 
@@ -80,6 +84,13 @@ func mustProcess(t *testing.T, agg *Aggregator, pin *aggregator.PinInscription) 
 	t.Helper()
 	if _, err := agg.HandleBlockPin(pin); err != nil {
 		t.Fatalf("HandleBlockPin(%s): %v", pin.Id, err)
+	}
+}
+
+func mustProcessMempool(t *testing.T, agg *Aggregator, pin *aggregator.PinInscription) {
+	t.Helper()
+	if _, err := agg.HandleMempoolPin(pin); err != nil {
+		t.Fatalf("HandleMempoolPin(%s): %v", pin.Id, err)
 	}
 }
 
@@ -150,6 +161,78 @@ func TestProcessCreateModifyRevokeFoldsCurrentRecord(t *testing.T) {
 	}
 	if len(result.Items) != 0 {
 		t.Fatalf("revoked records should be hidden by default, got %d", len(result.Items))
+	}
+}
+
+func TestMempoolCreateIsUpgradedByConfirmedBlockPin(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcessMempool(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "same-create:i0",
+		Operation:    OperationCreate,
+		Timestamp:    1000,
+		Number:       11,
+		ContentBody:  []byte("mempool body"),
+		GlobalMetaId: "gid-old",
+		MetaId:       "meta-old",
+		Address:      "addr-old",
+		Host:         "mempool-host",
+	}))
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "same-create:i0",
+		Operation:    OperationCreate,
+		Timestamp:    2000,
+		Number:       22,
+		ContentBody:  []byte("confirmed body"),
+		GlobalMetaId: "gid-new",
+		MetaId:       "meta-new",
+		Address:      "addr-new",
+		Host:         "block-host",
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathSimpleBuzz, "same-create:i0")
+	if rec.IsMempool {
+		t.Fatal("confirmed block replay should clear mempool state")
+	}
+	if rec.CreatedAt != 2000 || rec.UpdatedAt != 2000 {
+		t.Errorf("confirmed create should replace timestamps, got createdAt=%d updatedAt=%d", rec.CreatedAt, rec.UpdatedAt)
+	}
+	if rec.SourceNumber != 22 || rec.CurrentNumber != 22 {
+		t.Errorf("confirmed create should replace block numbers, got source=%d current=%d", rec.SourceNumber, rec.CurrentNumber)
+	}
+	if rec.SourceHost != "block-host" || rec.CurrentHost != "block-host" {
+		t.Errorf("confirmed create should replace hosts, got source=%q current=%q", rec.SourceHost, rec.CurrentHost)
+	}
+	if rec.PublisherGlobalMetaId != "gid-new" || rec.PublisherMetaId != "meta-new" || rec.PublisherAddress != "addr-new" {
+		t.Errorf("confirmed create should replace identity, got global=%q meta=%q address=%q", rec.PublisherGlobalMetaId, rec.PublisherMetaId, rec.PublisherAddress)
+	}
+	if rec.PayloadText != "confirmed body" {
+		t.Errorf("confirmed create should replace payload, got %q", rec.PayloadText)
+	}
+
+	oldIdentity, err := agg.List(ListParams{
+		ProtocolPath:          PathSimpleBuzz,
+		PublisherGlobalMetaId: "gid-old",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List old identity: %v", err)
+	}
+	if len(oldIdentity.Items) != 0 {
+		t.Fatalf("old identity index should not list upgraded record, got %d item(s)", len(oldIdentity.Items))
+	}
+
+	newIdentity, err := agg.List(ListParams{
+		ProtocolPath:          PathSimpleBuzz,
+		PublisherGlobalMetaId: "gid-new",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List new identity: %v", err)
+	}
+	if len(newIdentity.Items) != 1 || newIdentity.Items[0].SourcePinId != "same-create:i0" {
+		t.Fatalf("new identity index should list upgraded record, got %+v", newIdentity.Items)
 	}
 }
 

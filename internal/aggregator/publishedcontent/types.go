@@ -28,6 +28,7 @@ type Record struct {
 
 	Operation string `json:"operation"`
 	Hidden    bool   `json:"hidden"`
+	IsMempool bool   `json:"isMempool,omitempty"`
 
 	ContentType    string         `json:"contentType"`
 	PayloadText    string         `json:"payloadText,omitempty"`
@@ -72,6 +73,7 @@ type SectionItem struct {
 
 	Operation string `json:"operation"`
 	Hidden    bool   `json:"hidden"`
+	IsMempool bool   `json:"isMempool,omitempty"`
 
 	ContentType    string         `json:"contentType"`
 	PayloadText    string         `json:"payloadText,omitempty"`
