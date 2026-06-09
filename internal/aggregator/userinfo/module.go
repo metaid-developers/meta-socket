@@ -357,8 +357,9 @@ func (a *Aggregator) saveProfileAtKey(key string, profile *UserProfile) error {
 
 func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) {
 	if raw, err := a.store.Get(namespace, addressKey(address)); err == nil && len(raw) > 0 {
-		if profile, err := a.getProfile(string(raw)); err != nil {
-			return nil, err
+		indexedMetaID := string(raw)
+		if profile, err := a.getProfile(indexedMetaID); err != nil {
+			log.Printf("[userinfo] stale address index %q -> %q: %v", address, indexedMetaID, err)
 		} else if profile != nil {
 			return profile, nil
 		}
@@ -381,8 +382,9 @@ func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) 
 
 func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
 	if raw, err := a.store.Get(namespace, globalMetaIdKey(globalMetaId)); err == nil && len(raw) > 0 {
-		if profile, err := a.getProfile(string(raw)); err != nil {
-			return nil, err
+		indexedMetaID := string(raw)
+		if profile, err := a.getProfile(indexedMetaID); err != nil {
+			log.Printf("[userinfo] stale globalMetaId index %q -> %q: %v", globalMetaId, indexedMetaID, err)
 		} else if profile != nil {
 			return profile, nil
 		}

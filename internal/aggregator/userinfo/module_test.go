@@ -282,6 +282,125 @@ func TestLookupByGlobalMetaId_UsesReverseIndex(t *testing.T) {
 	}
 }
 
+func TestLookupByGlobalMetaId_UsesReverseIndexWithoutScanMatch(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	indexedGlobal := "idq1indexedglobal"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_index_only_global",
+		GlobalMetaID: "idq1storedprofileglobal",
+		Address:      "address_index_only_global",
+		Name:         "Index Only Global",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := store.Set(namespace, globalMetaIdKey(indexedGlobal), []byte("meta_index_only_global")); err != nil {
+		t.Fatalf("seed globalMetaId index: %v", err)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(indexedGlobal)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_index_only_global" {
+		t.Fatalf("reverse index lookup returned %#v", profile)
+	}
+}
+
+func TestLookupByAddress_UsesReverseIndexWithoutScanMatch(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	indexedAddress := "address_indexed_only"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_index_only_address",
+		GlobalMetaID: "idq1indexonlyaddress",
+		Address:      "stored_address_only",
+		Name:         "Index Only Address",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := store.Set(namespace, addressKey(indexedAddress), []byte("meta_index_only_address")); err != nil {
+		t.Fatalf("seed address index: %v", err)
+	}
+
+	profile, err := agg.LookupByAddress(indexedAddress)
+	if err != nil {
+		t.Fatalf("LookupByAddress: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_index_only_address" {
+		t.Fatalf("reverse index lookup returned %#v", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_FallsBackToScanWhenIndexedProfileIsCorrupt(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	global := "idq1corruptglobalfallback"
+	if err := store.Set(namespace, profileKey("meta_corrupt_global"), []byte("{not-json")); err != nil {
+		t.Fatalf("seed corrupt profile: %v", err)
+	}
+	if err := store.Set(namespace, globalMetaIdKey(global), []byte("meta_corrupt_global")); err != nil {
+		t.Fatalf("seed corrupt globalMetaId index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_global"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_global",
+		GlobalMetaID: global,
+		Address:      "scan_global_address",
+		Name:         "Scan Global",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_global" {
+		t.Fatalf("scan fallback returned %#v", profile)
+	}
+}
+
+func TestLookupByAddress_FallsBackToScanWhenIndexedProfileIsCorrupt(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	address := "address_corrupt_fallback"
+	if err := store.Set(namespace, profileKey("meta_corrupt_address"), []byte("{not-json")); err != nil {
+		t.Fatalf("seed corrupt profile: %v", err)
+	}
+	if err := store.Set(namespace, addressKey(address), []byte("meta_corrupt_address")); err != nil {
+		t.Fatalf("seed corrupt address index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_address"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_address",
+		GlobalMetaID: "idq1scanaddress",
+		Address:      address,
+		Name:         "Scan Address",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByAddress(address)
+	if err != nil {
+		t.Fatalf("LookupByAddress: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_address" {
+		t.Fatalf("scan fallback returned %#v", profile)
+	}
+}
+
+func mustMarshalProfile(t *testing.T, profile *UserProfile) []byte {
+	t.Helper()
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	return raw
+}
+
 // --- Acceptance Criteria #8: Cache hit ---
 
 func TestHandleMetaIdInfo_CacheHit(t *testing.T) {
