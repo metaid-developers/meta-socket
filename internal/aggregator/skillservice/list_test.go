@@ -724,6 +724,66 @@ func TestListHomepageByProviderCrossChain(t *testing.T) {
 	}
 }
 
+func TestListHomepageByProviderChainNameFiltersProviderGlobalChainIndex(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "mvc-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		ServiceName: "mvc-home", DisplayName: "MVC Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "btc-home:i0", Operation: OperationCreate, ChainName: "btc",
+		ProviderMetaId: "provA", Timestamp: 200,
+		ServiceName: "btc-home", DisplayName: "BTC Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		ChainName:            "mvc",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected one MVC homepage item, got %d: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ChainName != "mvc" || res.List[0].ServiceName != "mvc-home" {
+		t.Fatalf("expected only MVC service from chain-scoped homepage list, got %+v", res.List[0])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false for single MVC service")
+	}
+}
+
+func TestListHomepageByProviderIncludeInactiveReturnsDisabledService(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "disabled-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		Disabled:    true,
+		ServiceName: "disabled-home", DisplayName: "Disabled Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		IncludeInactive:      true,
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected disabled homepage item with includeInactive, got %d: %+v", len(res.List), res.List)
+	}
+	if !res.List[0].Disabled || res.List[0].ServiceName != "disabled-home" {
+		t.Fatalf("expected disabled homepage service, got %+v", res.List[0])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false for single inactive service")
+	}
+}
+
 func TestListHomepageByProviderSkipsStaleProviderGlobalIndex(t *testing.T) {
 	f := newListFixture(t)
 	f.seed(t, servicePinOpts{
