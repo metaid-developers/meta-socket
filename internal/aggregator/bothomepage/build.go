@@ -624,6 +624,7 @@ func sectionItemFromPublishedContent(item publishedcontent.SectionItem) SectionI
 		PayloadText:    item.PayloadText,
 		PayloadJSON:    item.PayloadJSON,
 		PayloadExposed: item.PayloadExposed,
+		IsMempool:      item.IsMempool,
 		CreatedAt:      item.CreatedAt,
 		UpdatedAt:      item.UpdatedAt,
 	}

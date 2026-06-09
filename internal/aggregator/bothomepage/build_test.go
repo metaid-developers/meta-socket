@@ -438,6 +438,41 @@ func TestBuildV2SectionsServicesActionEnabledWhenServicesOnlyInSection(t *testin
 	}
 }
 
+func TestBuildV2SectionsExposeMempoolContentItems(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Section Bot",
+	}})
+	agg.SetPublishedContentLister(&recordingPublishedContentLister{result: &publishedcontent.ListResult{Items: []publishedcontent.SectionItem{{
+		SourcePinId:  "source-pin:i0",
+		CurrentPinId: "current-pin:i0",
+		ProtocolPath: publishedcontent.PathMetaApp,
+		IsMempool:    true,
+		PayloadText:  "pending metaapp",
+	}}}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	metaapps := got.Sections[1]
+	if metaapps.Id != "metaapps" || len(metaapps.Items) != 1 {
+		t.Fatalf("metaapps section = %+v, want one content item", metaapps)
+	}
+	if !metaapps.Items[0].IsMempool {
+		t.Fatalf("metaapps item IsMempool = false, want true; item=%+v", metaapps.Items[0])
+	}
+}
+
 func TestSectionWithItemsKeepsMoreDisabledWhenHasMore(t *testing.T) {
 	items := []SectionItem{
 		{Id: "item-1"},

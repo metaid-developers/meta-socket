@@ -135,6 +135,7 @@ type SectionItem struct {
 	PayloadText    string         `json:"payloadText,omitempty"`
 	PayloadJSON    map[string]any `json:"payloadJson,omitempty"`
 	PayloadExposed bool           `json:"payloadExposed,omitempty"`
+	IsMempool      bool           `json:"isMempool,omitempty"`
 	CreatedAt      int64          `json:"createdAt,omitempty"`
 	UpdatedAt      int64          `json:"updatedAt,omitempty"`
 	Service        *Service       `json:"service,omitempty"`
