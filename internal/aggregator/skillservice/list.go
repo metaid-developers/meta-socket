@@ -3,6 +3,7 @@ package skillservice
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -30,6 +31,18 @@ type ListParams struct {
 	SortBy               string // "rating" (default) | "updated" | "price"
 	Order                string // "desc" (default) | "asc"
 	IncludeInactive      bool
+}
+
+type HomepageListParams struct {
+	ProviderGlobalMetaId string
+	ChainName            string
+	Size                 int
+	IncludeInactive      bool
+}
+
+type HomepageListResult struct {
+	List    []ServiceListItem
+	HasMore bool
 }
 
 // Default visibility filter constants and tuning knobs.
@@ -200,6 +213,50 @@ func (a *Aggregator) List(p ListParams) (*ListResult, error) {
 	}, nil
 }
 
+// ListHomepageByProvider returns the newest services for one canonical
+// provider homepage. It uses the provider-global secondary indexes so a
+// provider's cross-chain service cards can be read without scanning the
+// entire Bot Hub catalog.
+func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageListResult, error) {
+	p = normaliseHomepageListParams(p)
+	if p.ProviderGlobalMetaId == "" {
+		return &HomepageListResult{List: []ServiceListItem{}}, nil
+	}
+
+	candidates, err := a.scanHomepageProviderCandidates(p)
+	if err != nil {
+		return nil, err
+	}
+
+	hasMore := len(candidates) > p.Size
+	items := make([]ServiceListItem, 0, p.Size)
+	for _, candidate := range candidates {
+		rec, err := a.loadService(candidate.chainName, candidate.sourcePinId)
+		if err != nil {
+			return nil, err
+		}
+		if rec == nil {
+			continue
+		}
+		if !p.IncludeInactive && !rec.IsVisibleDefault() {
+			continue
+		}
+
+		profile := a.ResolveProvider(rec)
+		rating, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
+		items = append(items, a.toListItem(expandedRecord{rec: rec, profile: profile, rating: rating}))
+		if len(items) > p.Size {
+			hasMore = true
+			break
+		}
+	}
+	if len(items) > p.Size {
+		items = items[:p.Size]
+	}
+
+	return &HomepageListResult{List: items, HasMore: hasMore}, nil
+}
+
 // expandedRecord pairs a raw ServiceRecord with the in-process resolved
 // provider profile and rating aggregate. It lives just long enough to feed
 // the keyword filter, sort, and wire-mapping steps; it is never persisted.
@@ -208,6 +265,13 @@ type expandedRecord struct {
 	profile ProfileSnapshot
 	rating  *RatingAggregate
 }
+
+type homepageProviderCandidate struct {
+	chainName   string
+	sourcePinId string
+}
+
+var errStopHomepageScan = errors.New("stop homepage provider scan")
 
 // --- helpers ----------------------------------------------------------------
 
@@ -223,6 +287,13 @@ func normaliseListParams(p ListParams) ListParams {
 	return p
 }
 
+func normaliseHomepageListParams(p HomepageListParams) HomepageListParams {
+	p.Size = clampSize(p.Size)
+	p.ProviderGlobalMetaId = strings.TrimSpace(p.ProviderGlobalMetaId)
+	p.ChainName = strings.ToLower(strings.TrimSpace(p.ChainName))
+	return p
+}
+
 func clampSize(size int) int {
 	if size <= 0 {
 		return defaultListSize
@@ -231,6 +302,58 @@ func clampSize(size int) int {
 		return maxListSize
 	}
 	return size
+}
+
+func (a *Aggregator) scanHomepageProviderCandidates(p HomepageListParams) ([]homepageProviderCandidate, error) {
+	limit := p.Size + 1
+	candidates := make([]homepageProviderCandidate, 0, limit)
+
+	var prefix []byte
+	var parse func(string) (homepageProviderCandidate, bool)
+	if p.ChainName != "" {
+		prefix = providerGlobalChainIndexPrefix(p.ProviderGlobalMetaId, p.ChainName)
+		parse = func(key string) (homepageProviderCandidate, bool) {
+			return parseProviderGlobalChainIndexKey(key, string(prefix), p.ChainName)
+		}
+	} else {
+		prefix = providerGlobalIndexPrefix(p.ProviderGlobalMetaId)
+		parse = func(key string) (homepageProviderCandidate, bool) {
+			return parseProviderGlobalIndexKey(key, string(prefix))
+		}
+	}
+
+	err := a.store.ScanPrefix(NamespaceService, prefix, func(key, _ []byte) error {
+		candidate, ok := parse(string(key))
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+		if len(candidates) >= limit {
+			return errStopHomepageScan
+		}
+		return nil
+	})
+	if errors.Is(err, errStopHomepageScan) {
+		err = nil
+	}
+	return candidates, err
+}
+
+func parseProviderGlobalIndexKey(key, prefix string) (homepageProviderCandidate, bool) {
+	rest := strings.TrimPrefix(key, prefix)
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+		return homepageProviderCandidate{}, false
+	}
+	return homepageProviderCandidate{chainName: parts[1], sourcePinId: parts[2]}, true
+}
+
+func parseProviderGlobalChainIndexKey(key, prefix, chainName string) (homepageProviderCandidate, bool) {
+	rest := strings.TrimPrefix(key, prefix)
+	parts := strings.SplitN(rest, ":", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return homepageProviderCandidate{}, false
+	}
+	return homepageProviderCandidate{chainName: chainName, sourcePinId: parts[1]}, true
 }
 
 func normaliseSortBy(sortBy string) string {

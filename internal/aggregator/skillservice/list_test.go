@@ -579,3 +579,65 @@ func TestListEndpoint_ProviderFilter(t *testing.T) {
 		t.Errorf("provider filter wrong: %+v", body.Data.List)
 	}
 }
+
+func TestListHomepageByProviderGlobalMetaIdReadsNewestSix(t *testing.T) {
+	f := newListFixture(t)
+	for i := 1; i <= 7; i++ {
+		f.seed(t, servicePinOpts{
+			PinId: pinIdFor(i), Operation: OperationCreate, ChainName: "mvc",
+			ProviderMetaId: "provA", Timestamp: int64(i * 100),
+			ServiceName: "svc" + intToStr(i), DisplayName: "Service " + intToStr(i),
+		})
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 5 {
+		t.Fatalf("expected 5 homepage items, got %d", len(res.List))
+	}
+	if !res.HasMore {
+		t.Fatal("expected HasMore=true with more provider services available")
+	}
+	if res.List[0].ServiceName != "svc7" || res.List[4].ServiceName != "svc3" {
+		t.Fatalf("homepage order wrong: got first=%s fifth=%s", res.List[0].ServiceName, res.List[4].ServiceName)
+	}
+}
+
+func TestListHomepageByProviderCrossChain(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "mvc-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		ServiceName: "mvc-home", DisplayName: "MVC Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "btc-home:i0", Operation: OperationCreate, ChainName: "btc",
+		ProviderMetaId: "provA", Timestamp: 200,
+		ServiceName: "btc-home", DisplayName: "BTC Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 2 {
+		t.Fatalf("expected 2 cross-chain homepage items, got %d", len(res.List))
+	}
+	if res.List[0].ChainName != "btc" || res.List[0].ServiceName != "btc-home" {
+		t.Fatalf("expected newest BTC service first, got %+v", res.List[0])
+	}
+	if res.List[1].ChainName != "mvc" || res.List[1].ServiceName != "mvc-home" {
+		t.Fatalf("expected MVC service second, got %+v", res.List[1])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false for exactly two visible services")
+	}
+}

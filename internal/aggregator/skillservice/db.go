@@ -19,14 +19,20 @@ import (
 //   pin_to_source:<chainName>:<pinId>                         → sourceServicePinId (string)
 //   service_by_provider:<chainName>:<providerMetaId>:<sourceServicePinId>
 //                                                             → "" (index marker)
+//   service_by_provider_global:<providerGlobalMetaId>:<invertedUpdatedAt>:<chainName>:<sourceServicePinId>
+//                                                             → "" (index marker, descending by inverted ts)
+//   service_by_provider_global_chain:<providerGlobalMetaId>:<chainName>:<invertedUpdatedAt>:<sourceServicePinId>
+//                                                             → "" (index marker, descending by inverted ts)
 //   service_by_updated:<chainName>:<padded_updatedAt>:<sourceServicePinId>
 //                                                             → "" (index marker, descending by inverted ts)
 
 const (
-	keyService           = "service:"
-	keyPinToSource       = "pin_to_source:"
-	keyServiceByProvider = "service_by_provider:"
-	keyServiceByUpdated  = "service_by_updated:"
+	keyService                      = "service:"
+	keyPinToSource                  = "pin_to_source:"
+	keyServiceByProvider            = "service_by_provider:"
+	keyServiceByProviderGlobal      = "service_by_provider_global:"
+	keyServiceByProviderGlobalChain = "service_by_provider_global_chain:"
+	keyServiceByUpdated             = "service_by_updated:"
 )
 
 // serviceKey builds the primary Pebble key for a service record.
@@ -47,15 +53,34 @@ func providerIndexKey(chainName, providerMetaId, sourcePinId string) []byte {
 	return []byte(keyServiceByProvider + chainName + ":" + providerMetaId + ":" + sourcePinId)
 }
 
+func providerGlobalIndexKey(providerGlobalMetaId string, updatedAt int64, chainName, sourcePinId string) []byte {
+	return []byte(keyServiceByProviderGlobal + providerGlobalMetaId + ":" + invertedTimestampHex(updatedAt) + ":" + chainName + ":" + sourcePinId)
+}
+
+func providerGlobalIndexPrefix(providerGlobalMetaId string) []byte {
+	return []byte(keyServiceByProviderGlobal + providerGlobalMetaId + ":")
+}
+
+func providerGlobalChainIndexKey(providerGlobalMetaId, chainName string, updatedAt int64, sourcePinId string) []byte {
+	return []byte(keyServiceByProviderGlobalChain + providerGlobalMetaId + ":" + chainName + ":" + invertedTimestampHex(updatedAt) + ":" + sourcePinId)
+}
+
+func providerGlobalChainIndexPrefix(providerGlobalMetaId, chainName string) []byte {
+	return []byte(keyServiceByProviderGlobalChain + providerGlobalMetaId + ":" + chainName + ":")
+}
+
 // updatedIndexKey orders services by descending updatedAt within a chain.
 // We invert the timestamp so a forward prefix scan returns newest first,
 // which matches the spec's default sortBy=updated order.
 func updatedIndexKey(chainName string, updatedAt int64, sourcePinId string) []byte {
+	return []byte(keyServiceByUpdated + chainName + ":" + invertedTimestampHex(updatedAt) + ":" + sourcePinId)
+}
+
+func invertedTimestampHex(updatedAt int64) string {
 	inverted := ^uint64(updatedAt)
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, inverted)
-	hex := fmt.Sprintf("%016x", binary.BigEndian.Uint64(buf))
-	return []byte(keyServiceByUpdated + chainName + ":" + hex + ":" + sourcePinId)
+	return fmt.Sprintf("%016x", binary.BigEndian.Uint64(buf))
 }
 
 // loadService fetches a ServiceRecord by its sourceServicePinId. Returns
@@ -124,6 +149,12 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 			_ = a.store.Delete(NamespaceService,
 				updatedIndexKey(previous.ChainName, previous.UpdatedAt, previous.SourceServicePinId))
 		}
+		if previous.ProviderGlobalMetaId != "" {
+			_ = a.store.Delete(NamespaceService,
+				providerGlobalIndexKey(previous.ProviderGlobalMetaId, previous.UpdatedAt, previous.ChainName, previous.SourceServicePinId))
+			_ = a.store.Delete(NamespaceService,
+				providerGlobalChainIndexKey(previous.ProviderGlobalMetaId, previous.ChainName, previous.UpdatedAt, previous.SourceServicePinId))
+		}
 	}
 
 	raw, err := json.Marshal(rec)
@@ -136,6 +167,16 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 	if rec.ProviderMetaId != "" {
 		if err := a.store.Set(NamespaceService,
 			providerIndexKey(rec.ChainName, rec.ProviderMetaId, rec.SourceServicePinId), []byte{}); err != nil {
+			return err
+		}
+	}
+	if rec.ProviderGlobalMetaId != "" {
+		if err := a.store.Set(NamespaceService,
+			providerGlobalIndexKey(rec.ProviderGlobalMetaId, rec.UpdatedAt, rec.ChainName, rec.SourceServicePinId), []byte{}); err != nil {
+			return err
+		}
+		if err := a.store.Set(NamespaceService,
+			providerGlobalChainIndexKey(rec.ProviderGlobalMetaId, rec.ChainName, rec.UpdatedAt, rec.SourceServicePinId), []byte{}); err != nil {
 			return err
 		}
 	}
