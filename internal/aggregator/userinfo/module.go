@@ -116,6 +116,19 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 			ChainName: pin.ChainName,
 		}
 	}
+	if profile.Address == "" && address != "" {
+		profile.Address = address
+	}
+	if profile.GlobalMetaID == "" {
+		if globalMetaID := strings.TrimSpace(pin.GlobalMetaId); globalMetaID != "" {
+			profile.GlobalMetaID = globalMetaID
+		} else if address != "" {
+			profile.GlobalMetaID = idaddress.EncodeGlobalMetaId(address, pin.ChainName)
+		}
+	}
+	if profile.ChainName == "" && pin.ChainName != "" {
+		profile.ChainName = pin.ChainName
+	}
 
 	// / (init) — first-time registration
 	if path == "/" {
