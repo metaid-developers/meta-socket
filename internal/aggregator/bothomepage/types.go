@@ -138,6 +138,7 @@ type SectionItem struct {
 	IsMempool      bool           `json:"isMempool,omitempty"`
 	CreatedAt      int64          `json:"createdAt,omitempty"`
 	UpdatedAt      int64          `json:"updatedAt,omitempty"`
+	Data           map[string]any `json:"data,omitempty"`
 	Service        *Service       `json:"service,omitempty"`
 }
 

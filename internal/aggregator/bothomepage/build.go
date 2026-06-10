@@ -675,7 +675,32 @@ func sectionItemFromPublishedContent(item publishedcontent.SectionItem) SectionI
 		IsMempool:      item.IsMempool,
 		CreatedAt:      item.CreatedAt,
 		UpdatedAt:      item.UpdatedAt,
+		Data:           sectionItemData(item),
 	}
+}
+
+func sectionItemData(item publishedcontent.SectionItem) map[string]any {
+	if !item.PayloadExposed {
+		return nil
+	}
+	if len(item.PayloadJSON) > 0 {
+		return map[string]any{"payload": cloneStringAnyMap(item.PayloadJSON)}
+	}
+	if strings.TrimSpace(item.PayloadText) != "" {
+		return map[string]any{"payload": item.PayloadText}
+	}
+	return nil
+}
+
+func cloneStringAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func sectionItemTitle(item publishedcontent.SectionItem) string {

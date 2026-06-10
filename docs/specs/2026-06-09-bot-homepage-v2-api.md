@@ -27,6 +27,8 @@ Mempool records flow through the same read models as confirmed records and can
 appear in the matching sections or services. Content section items expose
 `isMempool` when the item is still unconfirmed.
 
-Non-binary payloads are exposed on response items as `payloadText` or
-`payloadJson`, depending on the indexed content type and parse result. Binary
-payload bytes are not exposed in the homepage response.
+Non-binary payloads are exposed on response items as `data.payload`. JSON
+payloads are returned as structured JSON objects; plain text payloads are
+returned as strings. Binary payload bytes are not exposed in the homepage
+response. Transitional `payloadText`, `payloadJson`, and `payloadExposed`
+aliases may appear during rollout, but clients should read `data.payload`.

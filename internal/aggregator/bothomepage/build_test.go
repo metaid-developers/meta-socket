@@ -574,6 +574,86 @@ func TestBuildV2SectionsExposeMempoolContentItems(t *testing.T) {
 	}
 }
 
+func TestBuildV2SectionsExposePayloadUnderData(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Payload Bot",
+	}})
+	agg.SetPublishedContentLister(&recordingPublishedContentLister{result: &publishedcontent.ListResult{Items: []publishedcontent.SectionItem{
+		{
+			SourcePinId:  "json-source:i0",
+			CurrentPinId: "json-current:i0",
+			ProtocolPath: publishedcontent.PathMetaApp,
+			ContentType:  "application/json",
+			PayloadJSON: map[string]any{
+				"title": "JSON MetaAPP",
+				"kind":  "tool",
+			},
+			PayloadExposed: true,
+		},
+		{
+			SourcePinId:     "text-source:i0",
+			CurrentPinId:    "text-current:i0",
+			ProtocolPath:    publishedcontent.PathMetaApp,
+			ContentType:     "text/plain",
+			PayloadText:     "plain homepage item",
+			PayloadExposed:  true,
+			IsMempool:       true,
+			PublisherMetaId: "metaBot",
+		},
+	}}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	metaapps := got.Sections[1]
+	if len(metaapps.Items) != 2 {
+		t.Fatalf("metaapps items = %d, want 2; section=%+v", len(metaapps.Items), metaapps)
+	}
+
+	jsonPayload, ok := metaapps.Items[0].Data["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("JSON item data.payload = %#v, want object", metaapps.Items[0].Data["payload"])
+	}
+	if jsonPayload["title"] != "JSON MetaAPP" || jsonPayload["kind"] != "tool" {
+		t.Fatalf("JSON payload = %#v, want structured payload", jsonPayload)
+	}
+	textPayload, ok := metaapps.Items[1].Data["payload"].(string)
+	if !ok || textPayload != "plain homepage item" {
+		t.Fatalf("text item data.payload = %#v, want plain homepage item", metaapps.Items[1].Data["payload"])
+	}
+
+	raw, err := json.Marshal(metaapps.Items[0])
+	if err != nil {
+		t.Fatalf("json.Marshal section item: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatalf("json.Unmarshal section item %s: %v", raw, err)
+	}
+	data, ok := encoded["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("encoded data = %#v, want object; raw=%s", encoded["data"], raw)
+	}
+	payload, ok := data["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("encoded data.payload = %#v, want object; raw=%s", data["payload"], raw)
+	}
+	if payload["title"] != "JSON MetaAPP" {
+		t.Fatalf("encoded data.payload.title = %#v, want JSON MetaAPP; raw=%s", payload["title"], raw)
+	}
+}
+
 func TestSectionWithItemsKeepsMoreDisabledWhenHasMore(t *testing.T) {
 	items := []SectionItem{
 		{Id: "item-1"},
