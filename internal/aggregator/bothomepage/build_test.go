@@ -67,6 +67,32 @@ func (r *recordingPublishedContentLister) List(params publishedcontent.ListParam
 	return r.result, r.err
 }
 
+type pathPublishedContentLister struct {
+	gotParams []publishedcontent.ListParams
+}
+
+func (p *pathPublishedContentLister) List(params publishedcontent.ListParams) (*publishedcontent.ListResult, error) {
+	p.gotParams = append(p.gotParams, params)
+	return &publishedcontent.ListResult{Items: []publishedcontent.SectionItem{{
+		SourcePinId:           params.ProtocolPath + ":source",
+		CurrentPinId:          params.ProtocolPath + ":current",
+		ProtocolPath:          params.ProtocolPath,
+		PublisherGlobalMetaId: params.PublisherGlobalMetaId,
+		ChainName:             params.ChainName,
+		PayloadText:           params.ProtocolPath + " payload",
+		PayloadExposed:        true,
+		ContentType:           "text/plain",
+		CurrentNumber:         1,
+		CurrentHost:           "mvc",
+		CurrentPath:           params.ProtocolPath,
+		PublisherMetaId:       "metaBot",
+		PublisherAddress:      "1BotAddress",
+		SourceNumber:          1,
+		SourcePath:            params.ProtocolPath,
+		SourceHost:            "mvc",
+	}}}, nil
+}
+
 func TestBuildUserInfoLookupUnavailable(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -888,6 +914,104 @@ func TestBuildHomepageServiceProofsMarkVerificationPartial(t *testing.T) {
 	}
 }
 
+func TestBuildV2ProofsSeparatePersonaHomepageAndSections(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:  "idqBot",
+		Name:          "Proof Bot",
+		NameId:        "name-pin:i0",
+		Bio:           "Proof summary",
+		BioId:         "bio-pin:i0",
+		Role:          "Research agent",
+		RoleId:        "role-pin:i0",
+		Soul:          "Patient",
+		SoulId:        "soul-pin:i0",
+		Goal:          "Explain proofs",
+		GoalId:        "goal-pin:i0",
+		ChatSkills:    `["metabot-post-buzz"]`,
+		ChatSkillsId:  "skills-pin:i0",
+		LLM:           `{"provider":"deepseek","model":"v3"}`,
+		LLMId:         "llm-pin:i0",
+		Homepage:      `{"uri":"metafile://homepage","renderer":"html"}`,
+		HomepageId:    "homepage-pin:i0",
+		ChatPublicKey: "02chat",
+	}})
+	agg.SetHomepageServiceLister(&recordingHomepageServiceLister{result: &skillservice.HomepageListResult{List: []skillservice.ServiceListItem{{
+		Id:                 "svc-1",
+		CurrentPinId:       "svc-pin:i0",
+		SourceServicePinId: "source-svc-pin:i0",
+		DisplayName:        "Proof Service",
+	}}}})
+	agg.SetPublishedContentLister(&pathPublishedContentLister{})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+	opts.IncludeProofs = true
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Proofs.VerificationState != "partial" {
+		t.Fatalf("Proofs.VerificationState = %q, want partial", got.Proofs.VerificationState)
+	}
+	assertProfileProof(t, got.Proofs.Profile, "name", "/info/name", "name-pin:i0", "idqBot")
+	assertProfileProof(t, got.Proofs.Profile, "bio", "/info/bio", "bio-pin:i0", "idqBot")
+	for _, field := range []string{"role", "soul", "goal", "chatSkills", "llm"} {
+		if !hasProfileProofField(got.Proofs.Persona, field) {
+			t.Fatalf("missing persona proof for %q: %+v", field, got.Proofs.Persona)
+		}
+	}
+	assertProfileProof(t, got.Proofs.Persona, "role", "/info/role", "role-pin:i0", "idqBot")
+	assertProfileProof(t, got.Proofs.Persona, "soul", "/info/soul", "soul-pin:i0", "idqBot")
+	assertProfileProof(t, got.Proofs.Persona, "goal", "/info/goal", "goal-pin:i0", "idqBot")
+	assertProfileProof(t, got.Proofs.Persona, "chatSkills", "/info/chatSkills", "skills-pin:i0", "idqBot")
+	assertProfileProof(t, got.Proofs.Persona, "llm", "/info/LLM", "llm-pin:i0", "idqBot")
+	if got.Proofs.Persona[0].Txid != "" || got.Proofs.Persona[0].ContentHash != "" {
+		t.Fatalf("persona proof should not fake txid/contentHash: %+v", got.Proofs.Persona[0])
+	}
+
+	if got.Proofs.Homepage == nil {
+		t.Fatal("Proofs.Homepage = nil, want /info/homepage proof")
+	}
+	if got.Proofs.Homepage.PinId != "homepage-pin:i0" || got.Proofs.Homepage.ProtocolPath != "/info/homepage" {
+		t.Fatalf("Proofs.Homepage = %+v, want /info/homepage pin", got.Proofs.Homepage)
+	}
+	if got.Proofs.Homepage.Txid != "" || got.Proofs.Homepage.ContentHash != "" || got.Proofs.Homepage.ExplorerURL != "" {
+		t.Fatalf("homepage proof should not fake txid/contentHash/explorer: %+v", got.Proofs.Homepage)
+	}
+
+	for _, sectionID := range []string{"services", "metaapps", "skills", "buzzes"} {
+		proofs := got.Proofs.Sections[sectionID]
+		if len(proofs) != 1 {
+			t.Fatalf("Proofs.Sections[%q] length = %d, want 1; proofs=%+v", sectionID, len(proofs), got.Proofs.Sections)
+		}
+		if proofs[0].PinId == "" || proofs[0].ProtocolPath == "" {
+			t.Fatalf("Proofs.Sections[%q][0] = %+v, want pinId and protocolPath", sectionID, proofs[0])
+		}
+		if proofs[0].Txid != "" || proofs[0].ContentHash != "" || proofs[0].ExplorerURL != "" {
+			t.Fatalf("section proof should not fake txid/contentHash/explorer: %+v", proofs[0])
+		}
+	}
+
+	for _, section := range got.Sections {
+		if len(section.Items) == 0 {
+			continue
+		}
+		if section.Items[0].Proof == nil {
+			t.Fatalf("section %q first item proof = nil, want renderable proof summary", section.Id)
+		}
+		if section.Items[0].Proof.PinId == "" || section.Items[0].Proof.ProtocolPath == "" {
+			t.Fatalf("section %q first item proof = %+v, want pinId and protocolPath", section.Id, section.Items[0].Proof)
+		}
+	}
+}
+
 func TestBuildHomepageServiceListerErrorReturnsAggregationUnavailable(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -1033,6 +1157,15 @@ func assertProfileProof(t *testing.T, proofs []ProfileProof, field, path, pinID,
 		}
 	}
 	t.Fatalf("missing profile proof for field %q: %+v", field, proofs)
+}
+
+func hasProfileProofField(proofs []ProfileProof, field string) bool {
+	for _, proof := range proofs {
+		if proof.Field == field {
+			return true
+		}
+	}
+	return false
 }
 
 func containsWarning(warnings []string, needle string) bool {

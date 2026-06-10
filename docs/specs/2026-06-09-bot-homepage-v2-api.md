@@ -43,3 +43,11 @@ payloads are returned as structured JSON objects; plain text payloads are
 returned as strings. Binary payload bytes are not exposed in the homepage
 response. Transitional `payloadText`, `payloadJson`, and `payloadExposed`
 aliases may appear during rollout, but clients should read `data.payload`.
+
+When `includeProofs=true`, v2 proof metadata is grouped under `proofs.profile`,
+`proofs.persona`, `proofs.homepage`, and `proofs.sections`. Section proof
+summaries are keyed by section id (`services`, `metaapps`, `skills`, `buzzes`)
+and section items also expose their own `proof` summary when a pin id is
+indexed. The first rollout only emits indexed fields such as `pinId`,
+`protocolPath`, and `publisherGlobalMetaId`; txid, content hash, and explorer
+fields are omitted unless they are genuinely indexed.

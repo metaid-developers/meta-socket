@@ -71,16 +71,10 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		homepage = toHomepage(outProfile, persona, profile)
 	}
 	services := make([]Service, 0)
-	proofs := Proofs{
-		VerificationState: "unverified",
-		Identity:          nil,
-		Profile:           make([]ProfileProof, 0),
-		Homepage:          nil,
-		Services:          make([]ServiceProof, 0),
-	}
+	proofs := emptyProofs()
 	warnings := make([]string, 0)
 	if opts.IncludeProofs {
-		proofs, warnings = buildProfileProofs(profile, canonical.GlobalMetaId)
+		proofs, warnings = buildProfileProofs(profile, canonical.GlobalMetaId, opts.Version == "v2")
 	}
 
 	out := &Data{
@@ -110,11 +104,28 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		out.Warnings = warnings
 	}
 	if opts.Version == "v2" && opts.IncludeSections {
-		out.Sections, out.Warnings = a.loadSections(canonical.GlobalMetaId, opts, out.Warnings)
+		sectionProofs := make(map[string][]ProofSummary)
+		out.Sections, sectionProofs, out.Warnings = a.loadSections(canonical.GlobalMetaId, opts, out.Warnings)
+		if opts.IncludeProofs && len(sectionProofs) > 0 {
+			out.Proofs.Sections = sectionProofs
+			if out.Proofs.VerificationState != "partial" {
+				out.Proofs.VerificationState = "partial"
+			}
+		}
 	}
 	out.Actions = buildActions(out.Profile.ChatPubkey, serviceActionCount(out), canonical.GlobalMetaId)
 
 	return out, nil
+}
+
+func emptyProofs() Proofs {
+	return Proofs{
+		VerificationState: "unverified",
+		Identity:          nil,
+		Profile:           make([]ProfileProof, 0),
+		Homepage:          nil,
+		Services:          make([]ServiceProof, 0),
+	}
 }
 
 func schemaVersion(opts Options) string {
@@ -267,21 +278,15 @@ func buildActions(chatPubkey string, serviceCount int, canonicalGlobalMetaId str
 	}
 }
 
-func buildProfileProofs(p *ProfileSnapshot, canonicalGlobalMetaId string) (Proofs, []string) {
-	proofs := Proofs{
-		VerificationState: "unverified",
-		Identity:          nil,
-		Profile:           make([]ProfileProof, 0),
-		Homepage:          nil,
-		Services:          make([]ServiceProof, 0),
-	}
+func buildProfileProofs(p *ProfileSnapshot, canonicalGlobalMetaId string, includeV2 bool) (Proofs, []string) {
+	proofs := emptyProofs()
 	warnings := make([]string, 0)
 	if p == nil {
 		warnings = append(warnings, "profile proof metadata is unavailable")
 		return proofs, warnings
 	}
 
-	add := func(field, path, pinID string) {
+	addProfile := func(field, path, pinID string) {
 		pinID = strings.TrimSpace(pinID)
 		if pinID == "" {
 			return
@@ -294,18 +299,49 @@ func buildProfileProofs(p *ProfileSnapshot, canonicalGlobalMetaId string) (Proof
 		})
 		warnings = append(warnings, field+" proof txid/contentHash metadata is missing")
 	}
-	add("name", "/info/name", p.NameId)
-	add("avatar", "/info/avatar", p.AvatarId)
-	add("background", "/info/background", p.BackgroundId)
-	add("bio", "/info/bio", p.BioId)
-	add("role", "/info/role", p.RoleId)
-	add("soul", "/info/soul", p.SoulId)
-	add("goal", "/info/goal", p.GoalId)
-	add("chatSkills", "/info/chatSkills", p.ChatSkillsId)
-	add("llm", "/info/LLM", p.LLMId)
-	add("chatPubkey", "/info/chatpubkey", p.ChatPublicKeyId)
 
-	if len(proofs.Profile) > 0 {
+	addPersona := func(field, path, pinID string) {
+		pinID = strings.TrimSpace(pinID)
+		if pinID == "" {
+			return
+		}
+		proofs.Persona = append(proofs.Persona, ProfileProof{
+			Field:                 field,
+			ProtocolPath:          path,
+			PinId:                 pinID,
+			PublisherGlobalMetaId: canonicalGlobalMetaId,
+		})
+		warnings = append(warnings, field+" proof txid/contentHash metadata is missing")
+	}
+
+	addProfile("name", "/info/name", p.NameId)
+	addProfile("avatar", "/info/avatar", p.AvatarId)
+	addProfile("background", "/info/background", p.BackgroundId)
+	addProfile("bio", "/info/bio", p.BioId)
+	addProfile("chatPubkey", "/info/chatpubkey", p.ChatPublicKeyId)
+	if includeV2 {
+		addPersona("role", "/info/role", p.RoleId)
+		addPersona("soul", "/info/soul", p.SoulId)
+		addPersona("goal", "/info/goal", p.GoalId)
+		addPersona("chatSkills", "/info/chatSkills", p.ChatSkillsId)
+		addPersona("llm", "/info/LLM", p.LLMId)
+		if homepagePinID := strings.TrimSpace(p.HomepageId); homepagePinID != "" {
+			proofs.Homepage = &ProofSummary{
+				PinId:                 homepagePinID,
+				ProtocolPath:          "/info/homepage",
+				PublisherGlobalMetaId: canonicalGlobalMetaId,
+			}
+			warnings = append(warnings, "homepage proof txid/contentHash metadata is missing")
+		}
+	} else {
+		addProfile("role", "/info/role", p.RoleId)
+		addProfile("soul", "/info/soul", p.SoulId)
+		addProfile("goal", "/info/goal", p.GoalId)
+		addProfile("chatSkills", "/info/chatSkills", p.ChatSkillsId)
+		addProfile("llm", "/info/LLM", p.LLMId)
+	}
+
+	if len(proofs.Profile) > 0 || len(proofs.Persona) > 0 || proofs.Homepage != nil {
 		proofs.VerificationState = "partial"
 		return proofs, warnings
 	}
@@ -531,12 +567,16 @@ func serviceActionCount(out *Data) int {
 	return 0
 }
 
-func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, warnings []string) ([]Section, []string) {
+func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, warnings []string) ([]Section, map[string][]ProofSummary, []string) {
 	sections := make([]Section, 0, 4)
+	sectionProofs := make(map[string][]ProofSummary)
 
 	if opts.IncludeServices {
-		section, warning := a.loadServicesSection(canonicalGlobalMetaId, opts)
+		section, proofs, warning := a.loadServicesSection(canonicalGlobalMetaId, opts)
 		sections = append(sections, section)
+		if opts.IncludeProofs && len(proofs) > 0 {
+			sectionProofs[section.Id] = proofs
+		}
 		if warning != "" {
 			warnings = append(warnings, warning)
 		}
@@ -558,13 +598,16 @@ func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, wa
 		if !spec.enabled {
 			continue
 		}
-		section, warning := a.loadPublishedContentSection(canonicalGlobalMetaId, opts, spec.id, spec.title, spec.kind, spec.protocolPath, spec.warning)
+		section, proofs, warning := a.loadPublishedContentSection(canonicalGlobalMetaId, opts, spec.id, spec.title, spec.kind, spec.protocolPath, spec.warning)
 		sections = append(sections, section)
+		if opts.IncludeProofs && len(proofs) > 0 {
+			sectionProofs[section.Id] = proofs
+		}
 		if warning != "" {
 			warnings = append(warnings, warning)
 		}
 	}
-	return sections, warnings
+	return sections, sectionProofs, warnings
 }
 
 func emptySection(id, title, kind string) Section {
@@ -597,9 +640,9 @@ func sectionWithItems(id, title, kind string, items []SectionItem, hasMore bool)
 	}
 }
 
-func (a *Aggregator) loadServicesSection(canonicalGlobalMetaId string, opts Options) (Section, string) {
+func (a *Aggregator) loadServicesSection(canonicalGlobalMetaId string, opts Options) (Section, []ProofSummary, string) {
 	if a == nil || a.homepageServiceLister == nil {
-		return emptySection("services", "Services", "services"), ""
+		return emptySection("services", "Services", "services"), nil, ""
 	}
 	result, err := a.homepageServiceLister.ListHomepageByProvider(skillservice.HomepageListParams{
 		ProviderGlobalMetaId: canonicalGlobalMetaId,
@@ -608,22 +651,30 @@ func (a *Aggregator) loadServicesSection(canonicalGlobalMetaId string, opts Opti
 		IncludeInactive:      opts.IncludeInactiveServices,
 	})
 	if err != nil {
-		return emptySection("services", "Services", "services"), "services section unavailable"
+		return emptySection("services", "Services", "services"), nil, "services section unavailable"
 	}
 	if result == nil || len(result.List) == 0 {
-		return emptySection("services", "Services", "services"), ""
+		return emptySection("services", "Services", "services"), nil, ""
 	}
 	items := make([]SectionItem, 0, len(result.List))
+	proofs := make([]ProofSummary, 0, len(result.List))
 	for _, item := range result.List {
 		service := serviceFromListItem(item, nil)
-		items = append(items, sectionItemFromService(service))
+		sectionItem := sectionItemFromService(service, canonicalGlobalMetaId, opts.IncludeProofs)
+		items = append(items, sectionItem)
+		if sectionItem.Proof != nil {
+			proofs = append(proofs, *sectionItem.Proof)
+		}
 	}
-	return sectionWithItems("services", "Services", "services", items, result.HasMore), ""
+	if len(proofs) > homepageSectionLimit {
+		proofs = proofs[:homepageSectionLimit]
+	}
+	return sectionWithItems("services", "Services", "services", items, result.HasMore), proofs, ""
 }
 
-func (a *Aggregator) loadPublishedContentSection(canonicalGlobalMetaId string, opts Options, id, title, kind, protocolPath, warningText string) (Section, string) {
+func (a *Aggregator) loadPublishedContentSection(canonicalGlobalMetaId string, opts Options, id, title, kind, protocolPath, warningText string) (Section, []ProofSummary, string) {
 	if a == nil || a.publishedContentLister == nil {
-		return emptySection(id, title, kind), ""
+		return emptySection(id, title, kind), nil, ""
 	}
 	result, err := a.publishedContentLister.List(publishedcontent.ListParams{
 		ProtocolPath:          protocolPath,
@@ -632,19 +683,31 @@ func (a *Aggregator) loadPublishedContentSection(canonicalGlobalMetaId string, o
 		Size:                  homepageSectionReadSize,
 	})
 	if err != nil {
-		return emptySection(id, title, kind), warningText
+		return emptySection(id, title, kind), nil, warningText
 	}
 	if result == nil || len(result.Items) == 0 {
-		return emptySection(id, title, kind), ""
+		return emptySection(id, title, kind), nil, ""
 	}
 	items := make([]SectionItem, 0, len(result.Items))
+	proofs := make([]ProofSummary, 0, len(result.Items))
 	for _, item := range result.Items {
-		items = append(items, sectionItemFromPublishedContent(item))
+		sectionItem := sectionItemFromPublishedContent(item, protocolPath, canonicalGlobalMetaId, opts.IncludeProofs)
+		items = append(items, sectionItem)
+		if sectionItem.Proof != nil {
+			proofs = append(proofs, *sectionItem.Proof)
+		}
 	}
-	return sectionWithItems(id, title, kind, items, result.HasMore), ""
+	if len(proofs) > homepageSectionLimit {
+		proofs = proofs[:homepageSectionLimit]
+	}
+	return sectionWithItems(id, title, kind, items, result.HasMore), proofs, ""
 }
 
-func sectionItemFromService(service Service) SectionItem {
+func sectionItemFromService(service Service, publisherGlobalMetaId string, includeProofs bool) SectionItem {
+	var proof *ProofSummary
+	if includeProofs {
+		proof = proofSummaryFromService(service, publisherGlobalMetaId)
+	}
 	return SectionItem{
 		Id:           service.Id,
 		SourcePinId:  service.SourceServicePinId,
@@ -655,11 +718,16 @@ func sectionItemFromService(service Service) SectionItem {
 		Description:  service.Description,
 		CreatedAt:    service.CreatedAt,
 		UpdatedAt:    service.UpdatedAt,
+		Proof:        proof,
 		Service:      &service,
 	}
 }
 
-func sectionItemFromPublishedContent(item publishedcontent.SectionItem) SectionItem {
+func sectionItemFromPublishedContent(item publishedcontent.SectionItem, protocolPath, publisherGlobalMetaId string, includeProofs bool) SectionItem {
+	var proof *ProofSummary
+	if includeProofs {
+		proof = proofSummaryFromPublishedContent(item, protocolPath, publisherGlobalMetaId)
+	}
 	return SectionItem{
 		Id:             firstNonEmpty(item.CurrentPinId, item.SourcePinId),
 		SourcePinId:    item.SourcePinId,
@@ -675,7 +743,32 @@ func sectionItemFromPublishedContent(item publishedcontent.SectionItem) SectionI
 		IsMempool:      item.IsMempool,
 		CreatedAt:      item.CreatedAt,
 		UpdatedAt:      item.UpdatedAt,
+		Proof:          proof,
 		Data:           sectionItemData(item),
+	}
+}
+
+func proofSummaryFromService(service Service, publisherGlobalMetaId string) *ProofSummary {
+	pinID := firstNonEmpty(service.CurrentPinId, service.SourceServicePinId)
+	if pinID == "" {
+		return nil
+	}
+	return &ProofSummary{
+		PinId:                 pinID,
+		ProtocolPath:          skillservice.PathSkillService,
+		PublisherGlobalMetaId: strings.TrimSpace(publisherGlobalMetaId),
+	}
+}
+
+func proofSummaryFromPublishedContent(item publishedcontent.SectionItem, protocolPath, publisherGlobalMetaId string) *ProofSummary {
+	pinID := firstNonEmpty(item.CurrentPinId, item.SourcePinId)
+	if pinID == "" {
+		return nil
+	}
+	return &ProofSummary{
+		PinId:                 pinID,
+		ProtocolPath:          firstNonEmpty(item.ProtocolPath, protocolPath),
+		PublisherGlobalMetaId: firstNonEmpty(item.PublisherGlobalMetaId, publisherGlobalMetaId),
 	}
 }
 

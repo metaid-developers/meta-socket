@@ -138,6 +138,7 @@ type SectionItem struct {
 	IsMempool      bool           `json:"isMempool,omitempty"`
 	CreatedAt      int64          `json:"createdAt,omitempty"`
 	UpdatedAt      int64          `json:"updatedAt,omitempty"`
+	Proof          *ProofSummary  `json:"proof,omitempty"`
 	Data           map[string]any `json:"data,omitempty"`
 	Service        *Service       `json:"service,omitempty"`
 }
@@ -157,11 +158,13 @@ type Action struct {
 }
 
 type Proofs struct {
-	VerificationState string         `json:"verificationState"`
-	Identity          *ProofSummary  `json:"identity"`
-	Profile           []ProfileProof `json:"profile"`
-	Homepage          *ProofSummary  `json:"homepage"`
-	Services          []ServiceProof `json:"services"`
+	VerificationState string                    `json:"verificationState"`
+	Identity          *ProofSummary             `json:"identity"`
+	Profile           []ProfileProof            `json:"profile"`
+	Persona           []ProfileProof            `json:"persona,omitempty"`
+	Homepage          *ProofSummary             `json:"homepage"`
+	Sections          map[string][]ProofSummary `json:"sections,omitempty"`
+	Services          []ServiceProof            `json:"services"`
 }
 
 type ProofSummary struct {
