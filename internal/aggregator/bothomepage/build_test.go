@@ -67,6 +67,27 @@ func (r *recordingPublishedContentLister) List(params publishedcontent.ListParam
 	return r.result, r.err
 }
 
+type identityPublishedContentLister struct {
+	gotParams []publishedcontent.ListParams
+}
+
+func (l *identityPublishedContentLister) List(params publishedcontent.ListParams) (*publishedcontent.ListResult, error) {
+	l.gotParams = append(l.gotParams, params)
+	if params.PublisherAddress == "1BotAddress" {
+		return &publishedcontent.ListResult{Items: []publishedcontent.SectionItem{{
+			SourcePinId:      "address-buzz:i0",
+			CurrentPinId:     "address-buzz:i0",
+			ProtocolPath:     publishedcontent.PathSimpleBuzz,
+			PublisherAddress: "1BotAddress",
+			ContentType:      "text/plain",
+			PayloadText:      "address indexed buzz",
+			PayloadExposed:   true,
+			CreatedAt:        1781252638,
+		}}}, nil
+	}
+	return &publishedcontent.ListResult{}, nil
+}
+
 type pathPublishedContentLister struct {
 	gotParams []publishedcontent.ListParams
 }
@@ -668,6 +689,54 @@ func TestBuildV2SectionsExposeMempoolContentItems(t *testing.T) {
 	}
 	if !metaapps.Items[0].IsMempool {
 		t.Fatalf("metaapps item IsMempool = false, want true; item=%+v", metaapps.Items[0])
+	}
+}
+
+func TestBuildV2PublishedSectionsUseCanonicalAddressFallback(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		MetaId:       "metaBot",
+		Address:      "1BotAddress",
+		Name:         "Address Bot",
+	}})
+	lister := &identityPublishedContentLister{}
+	agg.SetPublishedContentLister(lister)
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+	opts.IncludeMetaApps = false
+	opts.IncludeSkills = false
+	opts.IncludeBuzzes = true
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if len(lister.gotParams) != 3 {
+		t.Fatalf("published content calls = %d, want global, metaid, then address fallback; params=%+v", len(lister.gotParams), lister.gotParams)
+	}
+	if lister.gotParams[0].PublisherGlobalMetaId != "idqBot" {
+		t.Fatalf("first query globalMetaId = %q, want idqBot", lister.gotParams[0].PublisherGlobalMetaId)
+	}
+	if lister.gotParams[1].PublisherMetaId != "metaBot" {
+		t.Fatalf("second query metaid = %q, want metaBot", lister.gotParams[1].PublisherMetaId)
+	}
+	if lister.gotParams[2].PublisherAddress != "1BotAddress" {
+		t.Fatalf("fallback query address = %q, want 1BotAddress", lister.gotParams[2].PublisherAddress)
+	}
+
+	buzzes := got.Sections[1]
+	if buzzes.Id != "buzzes" || len(buzzes.Items) != 1 {
+		t.Fatalf("buzzes section = %+v, want one address-indexed item", buzzes)
+	}
+	if buzzes.Items[0].SourcePinId != "address-buzz:i0" {
+		t.Fatalf("buzz source pin = %q, want address-buzz:i0", buzzes.Items[0].SourcePinId)
 	}
 }
 
