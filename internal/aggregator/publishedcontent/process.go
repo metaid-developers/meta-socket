@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 func (a *Aggregator) processPin(pin *aggregator.PinInscription, isMempool bool) error {
@@ -147,7 +148,7 @@ func newRecordFromPin(pin *aggregator.PinInscription, protocolPath, sourcePinId 
 		ChainName:    strings.ToLower(strings.TrimSpace(pin.ChainName)),
 		ProtocolPath: protocolPath,
 
-		PublisherGlobalMetaId: strings.TrimSpace(pin.GlobalMetaId),
+		PublisherGlobalMetaId: canonicalPublisherGlobalMetaId(pin),
 		PublisherMetaId:       firstNonEmpty(pin.MetaId, pin.CreateMetaId),
 		PublisherAddress:      firstNonEmpty(pin.Address, pin.CreateAddress),
 
@@ -174,6 +175,24 @@ func newRecordFromPin(pin *aggregator.PinInscription, protocolPath, sourcePinId 
 		rec.Hidden = true
 	}
 	return rec
+}
+
+func canonicalPublisherGlobalMetaId(pin *aggregator.PinInscription) string {
+	if pin == nil {
+		return ""
+	}
+	globalMetaId := strings.TrimSpace(pin.GlobalMetaId)
+	address := firstNonEmpty(pin.Address, pin.CreateAddress)
+	if address == "" {
+		return globalMetaId
+	}
+	if globalMetaId != "" && !strings.EqualFold(globalMetaId, address) {
+		return globalMetaId
+	}
+	if encoded := idaddress.EncodeGlobalMetaId(address, pin.ChainName); encoded != "" {
+		return encoded
+	}
+	return globalMetaId
 }
 
 type payloadResult struct {
