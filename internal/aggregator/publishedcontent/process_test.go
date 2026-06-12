@@ -7,6 +7,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 func setupTestAggregator(t *testing.T) (*Aggregator, *storage.PebbleStore) {
@@ -104,6 +105,42 @@ func mustLoadRecord(t *testing.T, agg *Aggregator, chainName, protocolPath, sour
 		t.Fatalf("expected record %s/%s/%s", chainName, protocolPath, sourcePinId)
 	}
 	return rec
+}
+
+func TestProcessCreateCanonicalizesAddressBackedGlobalMetaId(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	address := "1GrqX7K9jdnUor8hAoAfDx99uFH2tT75Za"
+	canonicalGlobalMetaId := idaddress.EncodeGlobalMetaId(address, "mvc")
+	if canonicalGlobalMetaId == "" {
+		t.Fatal("EncodeGlobalMetaId returned empty")
+	}
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "address-global-buzz:i0",
+		GlobalMetaId: address,
+		MetaId:       address,
+		Address:      address,
+		Timestamp:    1781252638,
+		ContentBody:  []byte("address global buzz"),
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathSimpleBuzz, "address-global-buzz:i0")
+	if rec.PublisherGlobalMetaId != canonicalGlobalMetaId {
+		t.Fatalf("PublisherGlobalMetaId = %q, want %q", rec.PublisherGlobalMetaId, canonicalGlobalMetaId)
+	}
+
+	result, err := agg.List(ListParams{
+		ProtocolPath:          PathSimpleBuzz,
+		PublisherGlobalMetaId: canonicalGlobalMetaId,
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List by canonical globalMetaId: %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].SourcePinId != "address-global-buzz:i0" {
+		t.Fatalf("List by canonical globalMetaId returned %+v, want address-global-buzz:i0", result.Items)
+	}
 }
 
 func TestProcessCreateModifyRevokeFoldsCurrentRecord(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
@@ -105,7 +106,7 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 	}
 	if opts.Version == "v2" && opts.IncludeSections {
 		sectionProofs := make(map[string][]ProofSummary)
-		out.Sections, sectionProofs, out.Warnings = a.loadSections(canonical.GlobalMetaId, opts, out.Warnings)
+		out.Sections, sectionProofs, out.Warnings = a.loadSections(canonical, opts, out.Warnings)
 		if opts.IncludeProofs && len(sectionProofs) > 0 {
 			out.Proofs.Sections = sectionProofs
 			if out.Proofs.VerificationState != "partial" {
@@ -567,12 +568,12 @@ func serviceActionCount(out *Data) int {
 	return 0
 }
 
-func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, warnings []string) ([]Section, map[string][]ProofSummary, []string) {
+func (a *Aggregator) loadSections(canonical CanonicalIdentity, opts Options, warnings []string) ([]Section, map[string][]ProofSummary, []string) {
 	sections := make([]Section, 0, 4)
 	sectionProofs := make(map[string][]ProofSummary)
 
 	if opts.IncludeServices {
-		section, proofs, warning := a.loadServicesSection(canonicalGlobalMetaId, opts)
+		section, proofs, warning := a.loadServicesSection(canonical.GlobalMetaId, opts)
 		sections = append(sections, section)
 		if opts.IncludeProofs && len(proofs) > 0 {
 			sectionProofs[section.Id] = proofs
@@ -598,7 +599,7 @@ func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, wa
 		if !spec.enabled {
 			continue
 		}
-		section, proofs, warning := a.loadPublishedContentSection(canonicalGlobalMetaId, opts, spec.id, spec.title, spec.kind, spec.protocolPath, spec.warning)
+		section, proofs, warning := a.loadPublishedContentSection(canonical, opts, spec.id, spec.title, spec.kind, spec.protocolPath, spec.warning)
 		sections = append(sections, section)
 		if opts.IncludeProofs && len(proofs) > 0 {
 			sectionProofs[section.Id] = proofs
@@ -672,16 +673,11 @@ func (a *Aggregator) loadServicesSection(canonicalGlobalMetaId string, opts Opti
 	return sectionWithItems("services", "Services", "services", items, result.HasMore), proofs, ""
 }
 
-func (a *Aggregator) loadPublishedContentSection(canonicalGlobalMetaId string, opts Options, id, title, kind, protocolPath, warningText string) (Section, []ProofSummary, string) {
+func (a *Aggregator) loadPublishedContentSection(canonical CanonicalIdentity, opts Options, id, title, kind, protocolPath, warningText string) (Section, []ProofSummary, string) {
 	if a == nil || a.publishedContentLister == nil {
 		return emptySection(id, title, kind), nil, ""
 	}
-	result, err := a.publishedContentLister.List(publishedcontent.ListParams{
-		ProtocolPath:          protocolPath,
-		PublisherGlobalMetaId: canonicalGlobalMetaId,
-		ChainName:             opts.ChainName,
-		Size:                  homepageSectionReadSize,
-	})
+	result, err := a.loadPublishedContentByCanonicalIdentity(canonical, opts, protocolPath)
 	if err != nil {
 		return emptySection(id, title, kind), nil, warningText
 	}
@@ -691,7 +687,7 @@ func (a *Aggregator) loadPublishedContentSection(canonicalGlobalMetaId string, o
 	items := make([]SectionItem, 0, len(result.Items))
 	proofs := make([]ProofSummary, 0, len(result.Items))
 	for _, item := range result.Items {
-		sectionItem := sectionItemFromPublishedContent(item, protocolPath, canonicalGlobalMetaId, opts.IncludeProofs)
+		sectionItem := sectionItemFromPublishedContent(item, protocolPath, canonical.GlobalMetaId, opts.IncludeProofs)
 		items = append(items, sectionItem)
 		if sectionItem.Proof != nil {
 			proofs = append(proofs, *sectionItem.Proof)
@@ -701,6 +697,100 @@ func (a *Aggregator) loadPublishedContentSection(canonicalGlobalMetaId string, o
 		proofs = proofs[:homepageSectionLimit]
 	}
 	return sectionWithItems(id, title, kind, items, result.HasMore), proofs, ""
+}
+
+func (a *Aggregator) loadPublishedContentByCanonicalIdentity(canonical CanonicalIdentity, opts Options, protocolPath string) (*publishedcontent.ListResult, error) {
+	queries := publishedContentIdentityQueries(canonical, opts, protocolPath)
+	items := make([]publishedcontent.SectionItem, 0, homepageSectionReadSize)
+	seen := make(map[string]struct{})
+	hasMore := false
+
+	for _, params := range queries {
+		result, err := a.publishedContentLister.List(params)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			continue
+		}
+		if result.HasMore {
+			hasMore = true
+		}
+		for _, item := range result.Items {
+			key := publishedContentItemKey(item)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			items = append(items, item)
+		}
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		left := publishedContentItemSortTimestamp(items[i])
+		right := publishedContentItemSortTimestamp(items[j])
+		if left == right {
+			return false
+		}
+		return left > right
+	})
+	if len(items) > homepageSectionReadSize {
+		hasMore = true
+		items = items[:homepageSectionReadSize]
+	}
+
+	return &publishedcontent.ListResult{Items: items, HasMore: hasMore}, nil
+}
+
+func publishedContentIdentityQueries(canonical CanonicalIdentity, opts Options, protocolPath string) []publishedcontent.ListParams {
+	base := publishedcontent.ListParams{
+		ProtocolPath: protocolPath,
+		ChainName:    opts.ChainName,
+		Size:         homepageSectionReadSize,
+	}
+	queries := make([]publishedcontent.ListParams, 0, 3)
+	seen := make(map[string]struct{})
+	add := func(kind, value string, apply func(*publishedcontent.ListParams, string)) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		key := kind + ":" + strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		params := base
+		apply(&params, value)
+		queries = append(queries, params)
+	}
+
+	add("global", canonical.GlobalMetaId, func(params *publishedcontent.ListParams, value string) {
+		params.PublisherGlobalMetaId = value
+	})
+	add("metaid", canonical.MetaId, func(params *publishedcontent.ListParams, value string) {
+		params.PublisherMetaId = value
+	})
+	add("address", canonical.Address, func(params *publishedcontent.ListParams, value string) {
+		params.PublisherAddress = value
+	})
+
+	return queries
+}
+
+func publishedContentItemKey(item publishedcontent.SectionItem) string {
+	pinId := firstNonEmpty(item.SourcePinId, item.CurrentPinId)
+	return strings.ToLower(item.ChainName) + ":" + item.ProtocolPath + ":" + pinId
+}
+
+func publishedContentItemSortTimestamp(item publishedcontent.SectionItem) int64 {
+	if item.ProtocolPath == publishedcontent.PathSimpleBuzz && item.CreatedAt > 0 {
+		return item.CreatedAt
+	}
+	if item.UpdatedAt > 0 {
+		return item.UpdatedAt
+	}
+	return item.CreatedAt
 }
 
 func sectionItemFromService(service Service, publisherGlobalMetaId string, includeProofs bool) SectionItem {
